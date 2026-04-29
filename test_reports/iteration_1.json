@@ -1,0 +1,29 @@
+{
+  "summary": "Backend 21/21 pytest passed including real Claude analyse + chat. Frontend signup, /login redirect, dashboard, and create-project modal verified rendering.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [
+      {"flow": "Create project from dashboard modal", "issue": "After clicking CREATE in modal, URL stayed on /dashboard (no auto-navigation to /projects/{id}). User must click the project card. Not blocking but a UX gap.", "affected_selectors": ["button:has-text('CREATE') in NEW/PROJECT modal"]}
+    ],
+    "design_issues": []
+  },
+  "test_report_links": ["/app/backend/tests/test_rfp_backend.py", "/app/test_reports/pytest/pytest_results.xml"],
+  "action_items": [
+    "Update /app/memory/test_credentials.md to use a real domain (e.g. @example.com). The .test TLD is rejected by pydantic EmailStr (email-validator) causing 422s.",
+    "Optional: After modal CREATE, navigate to /projects/{new_id} for better UX."
+  ],
+  "critical_code_review_comments": [
+    "JWT_SECRET in .env is the literal placeholder 'change-me-in-production-rfp-analyser-secret-key' - flag for prod deployment.",
+    "server.py uses deprecated FastAPI @app.on_event('shutdown') (replaced by lifespan in newer FastAPI).",
+    "EmailStr rejects .test TLD - update seed/test docs accordingly."
+  ],
+  "updated_files": ["/app/backend/tests/test_rfp_backend.py"],
+  "success_rate": {"backend": "100%", "frontend": "85%"},
+  "test_credentials": "Created during test runs: admin_<rand>@rfpqa.example.com / TestAdmin123! ; member_<rand>@rfpqa.example.com / TestAdmin123!",
+  "seed_data_creation": "Tests create unique users per run; cleanup of test projects/docs/invites is performed by tests themselves (delete flows verified).",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Backend regression suite at /app/backend/tests/test_rfp_backend.py covers all endpoints. Use @rfpqa.example.com domain (NOT .test). Real LLM calls take ~15-25s; total suite runs in ~22s.",
+  "rca of the issue": "Initial 422 on signup/login was caused by pydantic EmailStr rejecting the .test TLD recommended in test_credentials.md. Fixed by switching test emails to @rfpqa.example.com."
+}
