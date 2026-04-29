@@ -1,0 +1,114 @@
+{
+  "theme": "light",
+  "archetype": "4",
+  "archetype_name": "Swiss & High-Contrast",
+  "domain": "AEC SaaS (Engineering, Architecture, Construction)",
+  "emotional_tone": "Authoritative, Precise, Technical, Functional",
+  "typography": {
+    "fonts": {
+      "headings": "Satoshi, sans-serif",
+      "body": "IBM Plex Sans, sans-serif",
+      "mono": "IBM Plex Mono, monospace"
+    },
+    "hierarchy": {
+      "h1": "text-4xl sm:text-5xl tracking-tighter font-black",
+      "h2": "text-2xl sm:text-3xl tracking-tight font-bold",
+      "h3": "text-xl sm:text-2xl tracking-tight font-semibold",
+      "h4": "text-lg sm:text-xl tracking-tight font-medium",
+      "body": "text-sm sm:text-base leading-relaxed",
+      "small": "text-xs tracking-wider uppercase",
+      "mono_data": "font-mono text-sm tracking-tight"
+    },
+    "rules": [
+      "No Inter or default sans-serif for headings.",
+      "Headings must use tight letter spacing.",
+      "Overlines and labels must be uppercase, tiny, and wide spacing (tracking-[0.2em]).",
+      "Line height: tight for headers (leading-none), loose for body (leading-relaxed)."
+    ]
+  },
+  "colors": {
+    "background": {
+      "default": "#FAFAFA",
+      "paper": "#FFFFFF",
+      "inverted": "#0A0A0B"
+    },
+    "text": {
+      "primary": "#0A0A0B",
+      "secondary": "#52525B",
+      "inverted": "#FFFFFF"
+    },
+    "accents": {
+      "primary": "#0055FF",
+      "danger": "#FF3B30",
+      "warning": "#FFCC00",
+      "success": "#00C35A"
+    },
+    "borders": {
+      "default": "#E4E4E7",
+      "hard": "#0A0A0B"
+    },
+    "rules": [
+      "Color is Function Only: 95% of the UI should be monochrome. Color exists only to guide action or indicate status.",
+      "Tinted Grey Rule: Tint neutral greys with a tiny bit of blue to make them feel alive (zinc/slate).",
+      "Hover states: ALWAYS explicitly set text color on hover. focus states must have HIGHER contrast than default."
+    ]
+  },
+  "layout_and_spacing": {
+    "grid_strategy": "Control Room Grid",
+    "base_grid": "grid-cols-1 md:grid-cols-3 lg:grid-cols-4",
+    "gap": "gap-4 md:gap-6",
+    "spacing_scale": "p-1, p-2, p-4, p-6, p-8, p-12, p-16, p-24",
+    "containers": "Containers with borders must have internal padding (p-6 or p-8) to prevent text collision.",
+    "alignment": "Optical Alignment over geometrical. Left-align dense content, forms, tabular data.",
+    "border_radius": "Rounded-none (0px) or very sharp rounded-sm (max 4px). No soft/pill shapes."
+  },
+  "surfaces_and_microthemes": {
+    "dashboard_cards": "Grid Borders variant. Container with border-collapse style. Flat background, 1px subtle border, no shadow. Hover: slight lift (-translate-y-1), border color darkens.",
+    "headers": "Solid Background with a hard bottom border. If content scrolls, use Crystal Glass (backdrop-blur-xl bg-white/70 with 1px delicate inner stroke).",
+    "footers": "Massive Space. py-20. Big Type for main CTA."
+  },
+  "components": {
+    "tables": "Shadcn UI Tables. Use monospace font (IBM Plex Mono) for numeric data, dates, and IDs. Dense padding.",
+    "forms": "Shadcn UI Form components. Never use native inputs. Sharp corners.",
+    "buttons": "Shadcn UI. High contrast. Primary CTA uses #0055FF, other buttons outlined or ghost. Text always visible.",
+    "charts": "Shadcn chart components (Recharts). Accessible color-blind-friendly palettes using the accent colors.",
+    "modals": "Solid white background, sharp border, backdrop-blur on the overlay.",
+    "dialogs": "Shadcn UI dialogs. Use them for assigning disciplines to sub-consultants.",
+    "testing": "All interactive elements MUST include data-testid attribute (e.g., data-testid='upload-rfp-button')."
+  },
+  "animations": {
+    "hover": "Transition transform 0.2s ease, opacity 0.2s ease.",
+    "lists": "Staggered entrance animations for RFP lists and extracted requirements.",
+    "accessibility": "Must respect prefers-reduced-motion."
+  },
+  "icons": {
+    "library": "Phosphor Icons (@phosphor-icons/react)",
+    "style": "Duotone or bold weights to match the high-contrast technical aesthetic."
+  },
+  "media_and_images": {
+    "strategy": "Minimalist imagery. Let data and typography be the focus. Use blueprint visuals for login/signup backgrounds or empty states.",
+    "urls": [
+      {
+        "category": "hero_background",
+        "description": "Architectural blueprint layout for login/signup screen background or hero empty state.",
+        "url": "https://images.pexels.com/photos/4458196/pexels-photo-4458196.jpeg?auto=compress&cs=tinysrgb&dpr=2&h=650&w=940"
+      },
+      {
+        "category": "empty_state",
+        "description": "Blueprint drawing of tall building to be used in empty dashboard states.",
+        "url": "https://images.unsplash.com/photo-1771153511650-095180992e08?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NDQ2Mzl8MHwxfHNlYXJjaHwyfHxhcmNoaXRlY3R1cmFsJTIwYmx1ZXByaW50JTIwYmx1ZXByaW50JTIwZW5naW5lZXJpbmclMjBtb2Rlcm4lMjBidWlsZGluZ3xlbnwwfHx8fDE3Nzc0NDY1NzR8MA&ixlib=rb-4.1.0&q=85"
+      }
+    ],
+    "constraints": "Mobile height limit: Images MUST NOT exceed 80vh on mobile devices. Overlay max opacity bg-black/50 for text contrast."
+  },
+  "instructions_to_main_agent": [
+    "Install required fonts (Satoshi, IBM Plex Sans, IBM Plex Mono) and Phosphor Icons: yarn add @phosphor-icons/react",
+    "Configure Tailwind with the provided color palette, exact fonts, and sharp border radiuses.",
+    "Ensure high-contrast styling is applied. Use zinc colors for neutrals.",
+    "Structure the dashboard using the 'Control Room' dense grid approach. No generic Bootstrap columns.",
+    "For tables (Fee Merger View, Extracted Requirements), utilize monospace for numerical values.",
+    "Implement data-testid on every interactive component for testing.",
+    "Keep standard pages aligned left, no center-everything disease.",
+    "Incorporate Sovrium's technical, configuration-heavy aesthetic: visible structural borders, raw layout lines, and documentation-like neatness."
+  ]
+}
