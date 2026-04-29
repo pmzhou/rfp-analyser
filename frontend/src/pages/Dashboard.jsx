@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { api } from "@/lib/api";
 import Layout from "@/components/Layout";
 import { toast } from "sonner";
@@ -14,6 +14,7 @@ const STATUS_LABELS = {
 };
 
 const Dashboard = () => {
+  const navigate = useNavigate();
   const [projects, setProjects] = useState([]);
   const [loading, setLoading] = useState(true);
   const [showNew, setShowNew] = useState(false);
@@ -42,6 +43,7 @@ const Dashboard = () => {
       setShowNew(false);
       setForm({ title: "", client_name: "", description: "" });
       toast.success("Project created");
+      navigate(`/projects/${data.id}`);
     } catch (e) {
       toast.error(e?.response?.data?.detail || "Failed to create");
     } finally { setCreating(false); }
