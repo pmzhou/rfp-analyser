@@ -1,5 +1,6 @@
 """RFP Analyser — FastAPI backend."""
 import os
+import re
 import uuid
 import logging
 from datetime import datetime, timezone
@@ -11,8 +12,8 @@ from dotenv import load_dotenv
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
 
-from fastapi import FastAPI, APIRouter, HTTPException, Depends, UploadFile, File
-from fastapi.responses import FileResponse
+from fastapi import FastAPI, APIRouter, HTTPException, Depends, UploadFile, File, Query
+from fastapi.responses import FileResponse, Response, StreamingResponse
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
 from pydantic import BaseModel, Field, EmailStr
@@ -24,6 +25,8 @@ from document_service import (
     extract_text, index_document, query_project, delete_project, delete_document
 )
 from llm_service import analyze_rfp, answer_question
+from email_service import send_smtp, encrypt, decrypt, mask
+from export_service import export_pdf, export_xlsx
 
 UPLOAD_DIR = Path(os.environ['UPLOAD_DIR'])
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
@@ -241,6 +244,26 @@ async def remove_document(project_id: str, document_id: str, user=Depends(get_cu
 
 
 # ---------------------- analysis ---------------------- #
+async def _get_settings(user_id: str) -> Dict[str, Any]:
+    s = await db.settings.find_one({"user_id": user_id}, {"_id": 0})
+    if not s:
+        return {}
+    if s.get("llm_api_key"):
+        s["llm_api_key"] = decrypt(s["llm_api_key"])
+    if s.get("smtp_password"):
+        s["smtp_password"] = decrypt(s["smtp_password"])
+    return s
+
+
+async def _custom_requirements_block(user_id: str) -> str:
+    items = await db.library.find({"owner_id": user_id, "type": "requirement", "auto_inject": True}, {"_id": 0}).to_list(500)
+    if not items:
+        return ""
+    lines = [f"- [{i.get('category','')}] {i.get('requirement','')} ({'mandatory' if i.get('mandatory') else 'optional'})" for i in items]
+    return ("ALSO check whether the RFP triggers any of these firm-specific custom requirements; "
+            "if applicable, include them in the 'requirements' array with source='firm-library':\n" + "\n".join(lines))
+
+
 @api.post("/projects/{project_id}/analyze")
 async def analyze(project_id: str, user=Depends(get_current_user)):
     p = await db.projects.find_one({"id": project_id, "owner_id": user["id"]})
@@ -261,9 +284,12 @@ async def analyze(project_id: str, user=Depends(get_current_user)):
     if not combined.strip():
         raise HTTPException(400, "No extractable text in uploaded documents")
 
+    settings = await _get_settings(user["id"])
+    extra = await _custom_requirements_block(user["id"])
+
     await db.projects.update_one({"id": project_id}, {"$set": {"status": "analysing", "updated_at": now()}})
     try:
-        analysis = await analyze_rfp(project_id, combined)
+        analysis = await analyze_rfp(project_id, combined, settings, extra)
     except Exception as e:
         logger.exception("analysis failed")
         await db.projects.update_one({"id": project_id}, {"$set": {"status": "draft", "updated_at": now()}})
@@ -278,15 +304,352 @@ async def analyze(project_id: str, user=Depends(get_current_user)):
 
 @api.patch("/projects/{project_id}/analysis")
 async def update_analysis(project_id: str, body: Dict[str, Any], user=Depends(get_current_user)):
-    """Human-in-the-loop QA: persist user-edited analysis fields."""
+    """Human-in-the-loop QA: persist user-edited analysis fields, audit-logged."""
     p = await db.projects.find_one({"id": project_id, "owner_id": user["id"]})
     if not p:
         raise HTTPException(404, "Project not found")
+    prev = p.get("analysis") or {}
+    # diff: which top-level keys changed
+    changed_keys = sorted([k for k in set(list(prev.keys()) + list(body.keys())) if prev.get(k) != body.get(k)])
     await db.projects.update_one(
         {"id": project_id},
-        {"$set": {"analysis": body, "updated_at": now()}}
+        {"$set": {"analysis": body, "updated_at": now(), "last_edited_by": user["email"], "last_edited_at": now()}}
     )
+    await db.audit_logs.insert_one({
+        "id": new_id(),
+        "project_id": project_id,
+        "user_id": user["id"],
+        "user_email": user["email"],
+        "action": "edit_analysis",
+        "fields_changed": changed_keys,
+        "timestamp": now(),
+    })
     return await db.projects.find_one({"id": project_id}, {"_id": 0})
+
+
+@api.get("/projects/{project_id}/audit")
+async def project_audit(project_id: str, user=Depends(get_current_user)):
+    p = await db.projects.find_one({"id": project_id, "owner_id": user["id"]})
+    if not p:
+        raise HTTPException(404, "Project not found")
+    cursor = db.audit_logs.find({"project_id": project_id}, {"_id": 0}).sort("timestamp", -1)
+    return await cursor.to_list(200)
+
+
+@api.post("/projects/{project_id}/duplicate")
+async def duplicate_project(project_id: str, user=Depends(get_current_user)):
+    p = await db.projects.find_one({"id": project_id, "owner_id": user["id"]}, {"_id": 0})
+    if not p:
+        raise HTTPException(404, "Project not found")
+    new_proj = {
+        **p,
+        "id": new_id(),
+        "title": f"{p['title']} (copy)",
+        "status": "draft",
+        "outcome": None,
+        "awarded_amount": None,
+        "created_at": now(),
+        "updated_at": now(),
+    }
+    await db.projects.insert_one(new_proj)
+    return clean_doc(new_proj)
+
+
+class ProjectStatusIn(BaseModel):
+    outcome: Optional[str] = None        # won | lost | abandoned | pending
+    awarded_amount: Optional[float] = None
+
+
+@api.patch("/projects/{project_id}/outcome")
+async def set_outcome(project_id: str, body: ProjectStatusIn, user=Depends(get_current_user)):
+    p = await db.projects.find_one({"id": project_id, "owner_id": user["id"]})
+    if not p:
+        raise HTTPException(404, "Project not found")
+    upd: Dict[str, Any] = {"updated_at": now()}
+    if body.outcome is not None:
+        upd["outcome"] = body.outcome
+    if body.awarded_amount is not None:
+        upd["awarded_amount"] = body.awarded_amount
+    await db.projects.update_one({"id": project_id}, {"$set": upd})
+    return await db.projects.find_one({"id": project_id}, {"_id": 0})
+
+
+# ---------------------- export ---------------------- #
+@api.get("/projects/{project_id}/export")
+async def export_project(project_id: str, format: str = Query("pdf"), user=Depends(get_current_user)):
+    p = await db.projects.find_one({"id": project_id, "owner_id": user["id"]}, {"_id": 0})
+    if not p:
+        raise HTTPException(404, "Project not found")
+    invites = await db.invites.find({"project_id": project_id}, {"_id": 0}).to_list(500)
+    safe_name = re.sub(r"[^A-Za-z0-9_-]+", "_", p.get("title", "rfp"))[:60] or "rfp"
+    if format == "xlsx":
+        data = export_xlsx(p, invites)
+        return Response(data, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        headers={"Content-Disposition": f'attachment; filename="{safe_name}.xlsx"'})
+    data = export_pdf(p, invites)
+    return Response(data, media_type="application/pdf",
+                    headers={"Content-Disposition": f'attachment; filename="{safe_name}.pdf"'})
+
+
+# ---------------------- document file (for side-by-side viewer) ---------------------- #
+@api.get("/projects/{project_id}/documents/{document_id}/file")
+async def get_document_file(project_id: str, document_id: str, user=Depends(get_current_user)):
+    p = await db.projects.find_one({"id": project_id, "owner_id": user["id"]})
+    if not p:
+        raise HTTPException(404, "Project not found")
+    d = await db.documents.find_one({"id": document_id, "project_id": project_id})
+    if not d:
+        raise HTTPException(404, "Document not found")
+    path = Path(d["storage_path"])
+    if not path.exists():
+        raise HTTPException(404, "File missing on disk")
+    return FileResponse(str(path), filename=d["filename"], media_type=d.get("mime") or "application/octet-stream")
+
+
+# ---------------------- settings ---------------------- #
+class SettingsIn(BaseModel):
+    # SMTP
+    smtp_host: Optional[str] = ""
+    smtp_port: Optional[int] = 587
+    smtp_username: Optional[str] = ""
+    smtp_password: Optional[str] = None       # if None -> keep existing; if "" -> clear
+    smtp_use_tls: Optional[bool] = True
+    smtp_from_name: Optional[str] = ""
+    smtp_from_email: Optional[str] = ""
+    # LLM
+    llm_provider: Optional[str] = "anthropic"          # anthropic | openai | gemini | custom
+    llm_model: Optional[str] = "claude-sonnet-4-5-20250929"
+    llm_api_key: Optional[str] = None                  # None=keep, ""=clear
+    llm_base_url: Optional[str] = ""                   # for custom OpenAI-compatible endpoints
+
+
+def _public_settings(s: Dict[str, Any]) -> Dict[str, Any]:
+    s = dict(s or {})
+    s.pop("_id", None)
+    s["smtp_password_mask"] = mask(s.pop("smtp_password", "")) if s.get("smtp_password") or s.get("smtp_password") == "" else ""
+    s["llm_api_key_mask"] = mask(s.pop("llm_api_key", ""))
+    return s
+
+
+@api.get("/settings")
+async def get_settings(user=Depends(get_current_user)):
+    s = await db.settings.find_one({"user_id": user["id"]}) or {"user_id": user["id"]}
+    return _public_settings(s)
+
+
+@api.put("/settings")
+async def put_settings(body: SettingsIn, user=Depends(get_current_user)):
+    existing = await db.settings.find_one({"user_id": user["id"]}) or {}
+    upd: Dict[str, Any] = {"user_id": user["id"], "updated_at": now()}
+    # plain fields
+    for k in ("smtp_host","smtp_port","smtp_username","smtp_use_tls","smtp_from_name","smtp_from_email",
+              "llm_provider","llm_model","llm_base_url"):
+        v = getattr(body, k)
+        if v is not None:
+            upd[k] = v
+    # secret fields: None -> keep existing; "" -> clear; other -> encrypt + store
+    for k in ("smtp_password","llm_api_key"):
+        v = getattr(body, k)
+        if v is None:
+            if k in existing: upd[k] = existing[k]
+        elif v == "":
+            upd[k] = ""
+        else:
+            upd[k] = encrypt(v)
+    await db.settings.update_one({"user_id": user["id"]}, {"$set": upd}, upsert=True)
+    return _public_settings(await db.settings.find_one({"user_id": user["id"]}))
+
+
+class TestEmailIn(BaseModel):
+    to_email: EmailStr
+
+
+@api.post("/settings/test-email")
+async def test_email(body: TestEmailIn, user=Depends(get_current_user)):
+    s = await _get_settings(user["id"])
+    if not s.get("smtp_host"):
+        raise HTTPException(400, "Configure SMTP host first")
+    try:
+        await send_smtp(
+            host=s["smtp_host"], port=s.get("smtp_port") or 587,
+            username=s.get("smtp_username") or "", password=s.get("smtp_password") or "",
+            use_tls=bool(s.get("smtp_use_tls", True)),
+            from_name=s.get("smtp_from_name") or "RFP Analyser",
+            from_email=s.get("smtp_from_email") or s.get("smtp_username", ""),
+            to_email=body.to_email,
+            subject="RFP Analyser — SMTP test",
+            body_text="If you can read this, your SMTP settings are working.",
+        )
+    except Exception as e:
+        raise HTTPException(500, f"SMTP test failed: {e}")
+    return {"ok": True}
+
+
+# ---------------------- library: requirements / fee templates / contacts ---------------------- #
+class LibraryItemIn(BaseModel):
+    type: str                           # requirement | fee_template | contact
+    # requirement fields
+    category: Optional[str] = ""
+    requirement: Optional[str] = ""
+    mandatory: Optional[bool] = False
+    auto_inject: Optional[bool] = False
+    # fee_template fields
+    discipline: Optional[str] = ""
+    fee_format: Optional[str] = ""      # lump sum | hourly | per-deliverable | mixed
+    base_fee: Optional[float] = 0.0
+    currency: Optional[str] = "USD"
+    template_notes: Optional[str] = ""
+    # contact fields
+    consultant_name: Optional[str] = ""
+    consultant_email: Optional[str] = ""
+    consultant_company: Optional[str] = ""
+    contact_disciplines: Optional[List[str]] = []
+
+
+@api.get("/library")
+async def list_library(type: str = Query(...), user=Depends(get_current_user)):
+    if type not in ("requirement", "fee_template", "contact"):
+        raise HTTPException(400, "Invalid type")
+    cursor = db.library.find({"owner_id": user["id"], "type": type}, {"_id": 0}).sort("created_at", -1)
+    return await cursor.to_list(1000)
+
+
+@api.post("/library")
+async def create_library_item(body: LibraryItemIn, user=Depends(get_current_user)):
+    item = {"id": new_id(), "owner_id": user["id"], "created_at": now(), **body.model_dump()}
+    await db.library.insert_one(item)
+    return clean_doc(item)
+
+
+@api.put("/library/{item_id}")
+async def update_library_item(item_id: str, body: LibraryItemIn, user=Depends(get_current_user)):
+    res = await db.library.update_one(
+        {"id": item_id, "owner_id": user["id"]},
+        {"$set": body.model_dump()}
+    )
+    if res.matched_count == 0:
+        raise HTTPException(404, "Item not found")
+    return await db.library.find_one({"id": item_id}, {"_id": 0})
+
+
+@api.delete("/library/{item_id}")
+async def delete_library_item(item_id: str, user=Depends(get_current_user)):
+    res = await db.library.delete_one({"id": item_id, "owner_id": user["id"]})
+    if res.deleted_count == 0:
+        raise HTTPException(404, "Item not found")
+    return {"ok": True}
+
+
+# ---------------------- bulk invite ---------------------- #
+class BulkInvitesIn(BaseModel):
+    invites: List[InviteIn]
+    send_email: Optional[bool] = False
+
+
+@api.post("/projects/{project_id}/invites/bulk")
+async def bulk_invites(project_id: str, body: BulkInvitesIn, user=Depends(get_current_user)):
+    p = await db.projects.find_one({"id": project_id, "owner_id": user["id"]})
+    if not p:
+        raise HTTPException(404, "Project not found")
+    settings = await _get_settings(user["id"]) if body.send_email else {}
+    base_url = os.environ.get("PUBLIC_BASE_URL", "")
+    created = []
+    sent = 0
+    failed = []
+    for body_inv in body.invites:
+        invite = {
+            "id": new_id(), "project_id": project_id,
+            "share_token": uuid.uuid4().hex,
+            "discipline": body_inv.discipline,
+            "consultant_name": body_inv.consultant_name,
+            "consultant_email": body_inv.consultant_email.lower(),
+            "consultant_company": body_inv.consultant_company or "",
+            "notes": body_inv.notes or "",
+            "status": "sent",
+            "fee": None, "currency": None,
+            "response_notes": "", "response_timeline": "",
+            "responded_at": None, "created_at": now(),
+        }
+        await db.invites.insert_one(invite)
+        created.append(clean_doc(dict(invite)))
+        if body.send_email and settings.get("smtp_host"):
+            try:
+                share_url = f"{base_url}/respond/{invite['share_token']}" if base_url else f"/respond/{invite['share_token']}"
+                await send_smtp(
+                    host=settings["smtp_host"], port=settings.get("smtp_port") or 587,
+                    username=settings.get("smtp_username") or "",
+                    password=settings.get("smtp_password") or "",
+                    use_tls=bool(settings.get("smtp_use_tls", True)),
+                    from_name=settings.get("smtp_from_name") or "RFP Analyser",
+                    from_email=settings.get("smtp_from_email") or settings.get("smtp_username", ""),
+                    to_email=invite["consultant_email"],
+                    subject=f"Sub-consultant fee request — {p['title']} — {invite['discipline']}",
+                    body_text=(
+                        f"Hi {invite['consultant_name']},\n\n"
+                        f"We invite you to submit a fee for the {invite['discipline']} discipline on:\n"
+                        f"  Project: {p['title']}\n  Client: {p.get('client_name') or '—'}\n\n"
+                        f"Please review the scope and submit your fee here:\n{share_url}\n\nBest regards"
+                    ),
+                )
+                sent += 1
+            except Exception as e:
+                failed.append({"email": invite["consultant_email"], "error": str(e)})
+    if created:
+        await db.projects.update_one({"id": project_id}, {"$set": {"status": "distributed", "updated_at": now()}})
+    return {"created": created, "emails_sent": sent, "failed": failed}
+
+
+@api.post("/projects/{project_id}/invites/{invite_id}/send-email")
+async def send_invite_email(project_id: str, invite_id: str, user=Depends(get_current_user)):
+    p = await db.projects.find_one({"id": project_id, "owner_id": user["id"]})
+    if not p:
+        raise HTTPException(404, "Project not found")
+    inv = await db.invites.find_one({"id": invite_id, "project_id": project_id})
+    if not inv:
+        raise HTTPException(404, "Invite not found")
+    settings = await _get_settings(user["id"])
+    if not settings.get("smtp_host"):
+        raise HTTPException(400, "Configure SMTP in Settings first (or use the Copy Link button)")
+    base_url = os.environ.get("PUBLIC_BASE_URL", "")
+    share_url = f"{base_url}/respond/{inv['share_token']}" if base_url else f"/respond/{inv['share_token']}"
+    try:
+        await send_smtp(
+            host=settings["smtp_host"], port=settings.get("smtp_port") or 587,
+            username=settings.get("smtp_username") or "",
+            password=settings.get("smtp_password") or "",
+            use_tls=bool(settings.get("smtp_use_tls", True)),
+            from_name=settings.get("smtp_from_name") or "RFP Analyser",
+            from_email=settings.get("smtp_from_email") or settings.get("smtp_username", ""),
+            to_email=inv["consultant_email"],
+            subject=f"Sub-consultant fee request — {p['title']} — {inv['discipline']}",
+            body_text=(
+                f"Hi {inv['consultant_name']},\n\n"
+                f"We invite you to submit a fee for the {inv['discipline']} discipline on:\n"
+                f"  Project: {p['title']}\n  Client: {p.get('client_name') or '—'}\n\n"
+                f"Please review the scope and submit your fee here:\n{share_url}\n\nBest regards"
+            ),
+        )
+    except Exception as e:
+        raise HTTPException(500, f"Send failed: {e}")
+    return {"ok": True}
+
+
+# ---------------------- knowledge base / past proposals chat ---------------------- #
+@api.post("/projects/{project_id}/chat/cross")
+async def chat_cross(project_id: str, body: ChatIn, user=Depends(get_current_user)):
+    """Chat across the user's whole RFP history."""
+    p = await db.projects.find_one({"id": project_id, "owner_id": user["id"]})
+    if not p:
+        raise HTTPException(404, "Project not found")
+    own_projects = await db.projects.find({"owner_id": user["id"]}, {"_id": 0, "id": 1, "title": 1}).to_list(500)
+    context = []
+    for op in own_projects:
+        results = query_project(op["id"], body.question, n_results=2)
+        for t, m in results:
+            context.append({"text": t, "filename": (m or {}).get("filename","doc"), "project_title": op.get("title", "")})
+    settings = await _get_settings(user["id"])
+    answer = await answer_question(project_id, body.question, context[:10], settings)
+    return {"answer": answer, "sources": list({c["project_title"] for c in context if c.get("project_title")})}
 
 
 # ---------------------- invites (sub-consultants) ---------------------- #
@@ -428,7 +791,8 @@ async def chat_rfp(project_id: str, body: ChatIn, user=Depends(get_current_user)
         raise HTTPException(404, "Project not found")
     results = query_project(project_id, body.question, n_results=6)
     context = [{"text": t, "filename": (m or {}).get("filename", "doc")} for t, m in results]
-    answer = await answer_question(project_id, body.question, context)
+    settings = await _get_settings(user["id"])
+    answer = await answer_question(project_id, body.question, context, settings)
     return {"answer": answer, "sources": [c["filename"] for c in context]}
 
 

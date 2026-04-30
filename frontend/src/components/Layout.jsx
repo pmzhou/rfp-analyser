@@ -1,7 +1,7 @@
 import React from "react";
 import { Link, NavLink, useNavigate } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
-import { Buildings, SignOut, Stack } from "@phosphor-icons/react";
+import { Buildings, SignOut, Stack, Gear } from "@phosphor-icons/react";
 
 const Layout = ({ children }) => {
   const { user, logout } = useAuth();
@@ -26,6 +26,10 @@ const Layout = ({ children }) => {
             <NavLink to="/dashboard" data-testid="nav-projects"
               className={({isActive}) => `px-3 py-2 text-xs uppercase tracking-[0.18em] font-semibold transition-colors ${isActive ? 'text-[#0A0A0B]' : 'text-zinc-500 hover:text-[#0A0A0B]'}`}>
               Projects
+            </NavLink>
+            <NavLink to="/settings" data-testid="nav-settings"
+              className={({isActive}) => `px-3 py-2 text-xs uppercase tracking-[0.18em] font-semibold transition-colors flex items-center gap-1 ${isActive ? 'text-[#0A0A0B]' : 'text-zinc-500 hover:text-[#0A0A0B]'}`}>
+              <Gear size={12} weight="bold"/> Settings
             </NavLink>
             <div className="ml-4 flex items-center gap-3 pl-4 border-l border-zinc-200">
               <div className="text-right hidden sm:block">

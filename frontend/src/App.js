@@ -8,6 +8,7 @@ import Signup from "@/pages/Signup";
 import Dashboard from "@/pages/Dashboard";
 import ProjectDetail from "@/pages/ProjectDetail";
 import RespondPage from "@/pages/RespondPage";
+import Settings from "@/pages/Settings";
 
 const Protected = ({ children }) => {
   const { user, loading } = useAuth();
@@ -29,6 +30,7 @@ function App() {
             <Route path="/respond/:token" element={<RespondPage />} />
             <Route path="/dashboard" element={<Protected><Dashboard /></Protected>} />
             <Route path="/projects/:id" element={<Protected><ProjectDetail /></Protected>} />
+            <Route path="/settings" element={<Protected><Settings /></Protected>} />
             <Route path="*" element={<Navigate to="/dashboard" replace />} />
           </Routes>
         </AuthProvider>

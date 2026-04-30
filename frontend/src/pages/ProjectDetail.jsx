@@ -7,7 +7,8 @@ import {
   Upload, Trash, Sparkle, FileText, Calendar, ListChecks, Users,
   Money, ChatCircleText, ArrowRight, Plus, Copy, Envelope,
   CheckCircle, XCircle, Clock, ArrowLeft, Buildings,
-  PencilSimple, FloppyDisk, X as XIcon
+  PencilSimple, FloppyDisk, X as XIcon,
+  Copy as CopyIcon, FilePdf, FileXls, Trophy, Books, Eye, Warning, Globe, Receipt, PaperPlaneTilt, UploadSimple
 } from "@phosphor-icons/react";
 
 const TABS = [
@@ -70,6 +71,35 @@ const ProjectDetail = () => {
     catch { toast.error("Failed"); } finally { setBusy(false); }
   };
 
+  const onDuplicate = async () => {
+    setBusy(true);
+    try {
+      const { data } = await api.post(`/projects/${id}/duplicate`);
+      toast.success("Project duplicated");
+      navigate(`/projects/${data.id}`);
+    } catch (e) { toast.error(e?.response?.data?.detail || "Duplicate failed"); }
+    finally { setBusy(false); }
+  };
+
+  const onExport = async (format) => {
+    try {
+      const res = await api.get(`/projects/${id}/export?format=${format}`, { responseType: "blob" });
+      const url = window.URL.createObjectURL(new Blob([res.data]));
+      const a = document.createElement("a");
+      a.href = url; a.download = `${project.title.replace(/\W+/g,'_')}.${format}`;
+      document.body.appendChild(a); a.click(); a.remove();
+      window.URL.revokeObjectURL(url);
+    } catch (e) { toast.error("Export failed"); }
+  };
+
+  const setOutcome = async (val) => {
+    try {
+      const { data } = await api.patch(`/projects/${id}/outcome`, { outcome: val });
+      setProject(data);
+      toast.success(`Marked as ${val}`);
+    } catch (e) { toast.error("Failed"); }
+  };
+
   if (!project) return <Layout><div className="p-10 text-zinc-500 font-mono text-sm">Loading project…</div></Layout>;
 
   return (
@@ -88,10 +118,29 @@ const ProjectDetail = () => {
               <h1 className="font-display text-3xl sm:text-4xl tracking-tighter font-black leading-none" data-testid="project-title">{project.title}</h1>
               {project.description && <p className="mt-3 text-sm text-zinc-600 max-w-2xl">{project.description}</p>}
             </div>
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2 flex-wrap">
               <button onClick={onAnalyze} disabled={analyzing || docs.length === 0} data-testid="analyze-btn"
                 className="flex items-center gap-2 px-5 py-3 bg-[#0055FF] text-white text-xs font-semibold uppercase tracking-[0.15em] hover:bg-[#0A0A0B] disabled:opacity-50 transition-colors">
                 <Sparkle size={14} weight="bold" /> {analyzing ? "Analysing…" : project.analysis ? "Re-analyse" : "Analyse RFP"}
+              </button>
+              <select value={project.outcome || "pending"} onChange={(e) => setOutcome(e.target.value)} data-testid="outcome-select"
+                className="px-3 py-3 border border-[#0A0A0B] text-xs uppercase tracking-[0.15em] font-semibold bg-white">
+                <option value="pending">Pending</option>
+                <option value="won">Won</option>
+                <option value="lost">Lost</option>
+                <option value="abandoned">Abandoned</option>
+              </select>
+              <button onClick={onDuplicate} disabled={busy} title="Duplicate" data-testid="duplicate-btn"
+                className="p-3 border border-[#0A0A0B] hover:bg-[#0A0A0B] hover:text-white transition-colors">
+                <CopyIcon size={14} weight="bold" />
+              </button>
+              <button onClick={() => onExport("pdf")} title="Export PDF" data-testid="export-pdf-btn"
+                className="p-3 border border-[#0A0A0B] hover:bg-[#0A0A0B] hover:text-white transition-colors">
+                <FilePdf size={14} weight="bold" />
+              </button>
+              <button onClick={() => onExport("xlsx")} title="Export Excel" data-testid="export-xlsx-btn"
+                className="p-3 border border-[#0A0A0B] hover:bg-[#0A0A0B] hover:text-white transition-colors">
+                <FileXls size={14} weight="bold" />
               </button>
               <button onClick={onDelete} disabled={busy} data-testid="delete-project-btn"
                 className="p-3 border border-[#0A0A0B] hover:bg-[#FF3B30] hover:text-white hover:border-[#FF3B30] transition-colors">
@@ -151,6 +200,24 @@ const DocumentsTab = ({ projectId, docs, setDocs }) => {
   const inputRef = useRef();
   const [uploading, setUploading] = useState(false);
   const [progress, setProgress] = useState({});
+  const [viewing, setViewing] = useState(null);   // {id, filename}
+
+  const fileUrl = (docId) => {
+    const t = localStorage.getItem("rfp_token");
+    return `${process.env.REACT_APP_BACKEND_URL}/api/projects/${projectId}/documents/${docId}/file?_=${t}`;
+  };
+  // For viewer we need auth header; iframe can't send headers. We use a blob URL fetched via api.
+  const openViewer = async (doc) => {
+    try {
+      const res = await api.get(`/projects/${projectId}/documents/${doc.id}/file`, { responseType: "blob" });
+      const url = window.URL.createObjectURL(res.data);
+      setViewing({ ...doc, blobUrl: url });
+    } catch (e) { toast.error("Could not load document"); }
+  };
+  const closeViewer = () => {
+    if (viewing?.blobUrl) window.URL.revokeObjectURL(viewing.blobUrl);
+    setViewing(null);
+  };
 
   const onUpload = async (files) => {
     if (!files?.length) return;
@@ -223,12 +290,28 @@ const DocumentsTab = ({ projectId, docs, setDocs }) => {
               <div className="text-sm font-medium truncate">{d.filename}</div>
               <div className="text-[10px] uppercase tracking-[0.15em] text-zinc-500 font-mono">{(d.size/1024).toFixed(1)} KB · {d.chunks} chunks · {d.text_length.toLocaleString()} chars</div>
             </div>
+            <button onClick={() => openViewer(d)} title="View" data-testid={`view-doc-${d.id}`}
+              className="p-2 hover:bg-zinc-100"><Eye size={14} weight="bold" /></button>
             <button onClick={() => onDelete(d.id)} className="p-2 hover:bg-zinc-100" data-testid={`delete-doc-${d.id}`}>
               <Trash size={14} weight="bold" />
             </button>
           </div>
         ))}
       </div>
+      {viewing && (
+        <div className="fixed inset-0 z-50 flex bg-black/60 backdrop-blur-sm" onClick={closeViewer} data-testid="doc-viewer-modal">
+          <div className="ml-auto w-full max-w-5xl bg-white border-l border-[#0A0A0B] flex flex-col" onClick={(e)=>e.stopPropagation()}>
+            <div className="flex items-center justify-between p-4 border-b border-zinc-200">
+              <div className="min-w-0 flex-1">
+                <div className="overline mb-1">Source document</div>
+                <div className="font-mono text-sm truncate">{viewing.filename}</div>
+              </div>
+              <button onClick={closeViewer} data-testid="doc-viewer-close" className="p-2 hover:bg-zinc-100"><XIcon size={18} weight="bold"/></button>
+            </div>
+            <iframe src={viewing.blobUrl} title={viewing.filename} className="flex-1 w-full" />
+          </div>
+        </div>
+      )}
     </div>
   );
 };
@@ -392,9 +475,10 @@ const AnalysisTab = ({ projectId, analysis, onUpdate }) => {
             { key: "category", label: "Category", w: "w-44", mono: true },
             { key: "requirement", label: "Requirement" },
             { key: "mandatory", label: "Mandatory", w: "w-28", bool: true },
+            { key: "confidence", label: "Conf.", w: "w-20", confidence: true },
           ]}
           onUpdate={(arr)=>setField("requirements", arr)}
-          blank={{ id: "", category: "", requirement: "", mandatory: false, source: "" }} />
+          blank={{ id: "", category: "", requirement: "", mandatory: false, source: "", confidence: "high" }} />
 
         <RowsSection label="Technical Specifications"
           rows={draft.technical_specifications || []} editing={editing==="technical_specifications"}
@@ -405,9 +489,10 @@ const AnalysisTab = ({ projectId, analysis, onUpdate }) => {
             { key: "standard", label: "Standard", w: "w-40", mono: true },
             { key: "quantity", label: "Qty", w: "w-20", mono: true, align: "right" },
             { key: "unit", label: "Unit", w: "w-20", mono: true },
+            { key: "confidence", label: "Conf.", w: "w-20", confidence: true },
           ]}
           onUpdate={(arr)=>setField("technical_specifications", arr)}
-          blank={{ category: "", specification: "", standard: "", quantity: "", unit: "" }} />
+          blank={{ category: "", specification: "", standard: "", quantity: "", unit: "", confidence: "high" }} />
 
         <RowsSection label="Vendor Qualifications"
           rows={draft.vendor_qualifications || []} editing={editing==="vendor_qualifications"}
@@ -631,6 +716,12 @@ const RowsSection = ({ label, icon, rows, editing, onEdit, columns, onUpdate, bl
                         className="px-2 py-1 border border-[#0055FF] text-xs bg-white">
                         {c.select.map(o => <option key={o}>{o}</option>)}
                       </select>
+                    ) : c.confidence ? (
+                      <select value={r[c.key]||"high"} onChange={e=>update(i, c.key, e.target.value)}
+                        data-testid={`edit-${c.key}-${i}`}
+                        className="px-2 py-1 border border-[#0055FF] text-xs bg-white">
+                        {["high","medium","low"].map(o=><option key={o}>{o}</option>)}
+                      </select>
                     ) : c.multiline ? (
                       <textarea
                         rows={Math.max(2, Array.isArray(r[c.key]) ? r[c.key].length : 2)}
@@ -649,6 +740,8 @@ const RowsSection = ({ label, icon, rows, editing, onEdit, columns, onUpdate, bl
                       r[c.key]
                         ? <span className="text-[10px] uppercase tracking-[0.15em] font-mono px-2 py-0.5 bg-[#FF3B30] text-white">Yes</span>
                         : <span className="text-[10px] uppercase tracking-[0.15em] font-mono px-2 py-0.5 bg-zinc-100">Optional</span>
+                    ) : c.confidence ? (
+                      <ConfidenceBadge level={r[c.key]} />
                     ) : c.multiline && Array.isArray(r[c.key]) ? (
                       r[c.key].length > 0 ? (
                         <ul className="list-disc list-inside text-xs space-y-0.5">
@@ -803,9 +896,26 @@ const DutiesSection = ({ duties, editing, onEdit, onChange }) => {
 // ---- Disciplines / Invites ---- //
 const DisciplinesTab = ({ projectId, project, invites, setInvites }) => {
   const [showForm, setShowForm] = useState(false);
+  const [showBulk, setShowBulk] = useState(false);
   const [form, setForm] = useState({ discipline: "", consultant_name: "", consultant_email: "", consultant_company: "", notes: "" });
   const [busy, setBusy] = useState(false);
+  const [contacts, setContacts] = useState([]);
+  const [feeTpls, setFeeTpls] = useState([]);
   const disciplines = project.analysis?.disciplines || [];
+
+  useEffect(() => {
+    api.get("/library?type=contact").then(r => setContacts(r.data)).catch(() => {});
+    api.get("/library?type=fee_template").then(r => setFeeTpls(r.data)).catch(() => {});
+  }, []);
+
+  const matchingTemplate = feeTpls.find(t => (t.discipline||"").toLowerCase() === (form.discipline||"").toLowerCase());
+
+  const pickContact = (c) => setForm({
+    ...form,
+    consultant_name: c.consultant_name,
+    consultant_email: c.consultant_email,
+    consultant_company: c.consultant_company || "",
+  });
 
   const submit = async (e) => {
     e.preventDefault();
@@ -844,6 +954,13 @@ const DisciplinesTab = ({ projectId, project, invites, setInvites }) => {
     window.location.href = `mailto:${inv.consultant_email}?subject=${subject}&body=${body}`;
   };
 
+  const sendEmail = async (inv) => {
+    try {
+      await api.post(`/projects/${projectId}/invites/${inv.id}/send-email`);
+      toast.success(`Sent to ${inv.consultant_email}`);
+    } catch (e) { toast.error(e?.response?.data?.detail || "Send failed"); }
+  };
+
   return (
     <div>
       <div className="flex items-center justify-between mb-6 flex-wrap gap-3">
@@ -851,14 +968,36 @@ const DisciplinesTab = ({ projectId, project, invites, setInvites }) => {
           <div className="overline mb-1">Distribute</div>
           <div className="font-display text-2xl tracking-tighter font-black">Sub-consultants</div>
         </div>
-        <button onClick={() => setShowForm(!showForm)} data-testid="add-invite-btn"
-          className="flex items-center gap-2 px-5 py-3 bg-[#0A0A0B] text-white text-xs font-semibold uppercase tracking-[0.15em] hover:bg-[#0055FF] transition-colors">
-          <Plus size={14} weight="bold" /> {showForm ? "Cancel" : "Add invite"}
-        </button>
+        <div className="flex items-center gap-2">
+          <button onClick={() => setShowBulk(!showBulk)} data-testid="bulk-invite-btn"
+            className="flex items-center gap-2 px-4 py-3 border border-[#0A0A0B] text-xs font-semibold uppercase tracking-[0.15em] hover:bg-[#0A0A0B] hover:text-white transition-colors">
+            CSV bulk
+          </button>
+          <button onClick={() => setShowForm(!showForm)} data-testid="add-invite-btn"
+            className="flex items-center gap-2 px-5 py-3 bg-[#0A0A0B] text-white text-xs font-semibold uppercase tracking-[0.15em] hover:bg-[#0055FF] transition-colors">
+            <Plus size={14} weight="bold" /> {showForm ? "Cancel" : "Add invite"}
+          </button>
+        </div>
       </div>
+
+      {showBulk && (
+        <BulkInvitePanel projectId={projectId} disciplines={disciplines}
+          onCreated={(arr) => setInvites(prev => [...arr, ...prev])} onClose={() => setShowBulk(false)} />
+      )}
 
       {showForm && (
         <form onSubmit={submit} className="border border-[#0A0A0B] p-6 mb-8 grid grid-cols-1 md:grid-cols-2 gap-4" data-testid="invite-form">
+          {contacts.length > 0 && (
+            <div className="md:col-span-2 flex flex-wrap items-center gap-2 pb-2 border-b border-zinc-200">
+              <span className="overline">Address book:</span>
+              {contacts.slice(0, 8).map(c => (
+                <button key={c.id} type="button" onClick={()=>pickContact(c)} data-testid={`pick-contact-${c.id}`}
+                  className="text-[11px] uppercase tracking-[0.15em] font-mono px-2 py-1 border border-zinc-300 hover:border-[#0055FF] hover:text-[#0055FF] transition-colors">
+                  {c.consultant_name}
+                </button>
+              ))}
+            </div>
+          )}
           <div>
             <label className="overline block mb-2">Discipline*</label>
             {disciplines.length > 0 ? (
@@ -896,6 +1035,13 @@ const DisciplinesTab = ({ projectId, project, invites, setInvites }) => {
             <textarea rows={2} value={form.notes} onChange={(e)=>setForm({...form,notes:e.target.value})}
               data-testid="invite-notes-input"
               className="w-full px-3 py-3 border border-[#0A0A0B] focus:outline-none focus:ring-2 focus:ring-[#0055FF] text-sm resize-none" />
+            {matchingTemplate && (
+              <div className="mt-2 p-3 border border-[#0055FF] bg-[#0055FF]/5 text-xs" data-testid="fee-template-hint">
+                <div className="flex items-center gap-2 mb-1"><Receipt size={12} weight="bold" className="text-[#0055FF]"/> <span className="overline">Fee template found</span></div>
+                <span className="font-mono">{matchingTemplate.fee_format} · {matchingTemplate.currency} {Number(matchingTemplate.base_fee||0).toLocaleString()}</span>
+                {matchingTemplate.template_notes && <div className="text-zinc-600 mt-1">{matchingTemplate.template_notes}</div>}
+              </div>
+            )}
           </div>
           <div className="md:col-span-2 flex justify-end">
             <button type="submit" disabled={busy} data-testid="submit-invite-btn"
@@ -934,7 +1080,11 @@ const DisciplinesTab = ({ projectId, project, invites, setInvites }) => {
                   className="p-2 border border-[#0A0A0B] hover:bg-[#0A0A0B] hover:text-white transition-colors">
                   <Copy size={14} weight="bold" />
                 </button>
-                <button onClick={() => mailto(inv)} title="Email" data-testid={`email-${inv.id}`}
+                <button onClick={() => sendEmail(inv)} title="Send via SMTP" data-testid={`smtp-send-${inv.id}`}
+                  className="p-2 border border-[#0A0A0B] hover:bg-[#0055FF] hover:text-white hover:border-[#0055FF] transition-colors">
+                  <PaperPlaneTilt size={14} weight="bold" />
+                </button>
+                <button onClick={() => mailto(inv)} title="Open in mail client" data-testid={`email-${inv.id}`}
                   className="p-2 border border-[#0A0A0B] hover:bg-[#0A0A0B] hover:text-white transition-colors">
                   <Envelope size={14} weight="bold" />
                 </button>
@@ -950,6 +1100,74 @@ const DisciplinesTab = ({ projectId, project, invites, setInvites }) => {
     </div>
   );
 };
+
+// ---- Bulk invite via CSV ---- //
+const BulkInvitePanel = ({ projectId, disciplines, onCreated, onClose }) => {
+  const [text, setText] = useState("discipline,consultant_name,consultant_email,consultant_company\n");
+  const [sendEmail, setSendEmail] = useState(false);
+  const [busy, setBusy] = useState(false);
+
+  const parse = () => {
+    const lines = text.split("\n").map(l => l.trim()).filter(Boolean);
+    if (lines.length < 2) return [];
+    const head = lines[0].split(",").map(h => h.trim().toLowerCase());
+    return lines.slice(1).map(line => {
+      const cols = line.split(",").map(c => c.trim());
+      const o = {};
+      head.forEach((h, i) => { o[h] = cols[i] || ""; });
+      return {
+        discipline: o.discipline,
+        consultant_name: o.consultant_name || o.name,
+        consultant_email: o.consultant_email || o.email,
+        consultant_company: o.consultant_company || o.company || "",
+        notes: o.notes || "",
+      };
+    }).filter(r => r.consultant_email && r.discipline);
+  };
+
+  const submit = async () => {
+    const invites = parse();
+    if (invites.length === 0) return toast.error("No valid rows. Need columns: discipline, consultant_name, consultant_email");
+    setBusy(true);
+    try {
+      const { data } = await api.post(`/projects/${projectId}/invites/bulk`, { invites, send_email: sendEmail });
+      onCreated(data.created);
+      toast.success(`Created ${data.created.length} invite(s)${sendEmail ? `, ${data.emails_sent} email(s) sent` : ""}`);
+      if (data.failed?.length) toast.error(`${data.failed.length} email(s) failed`);
+      onClose();
+    } catch (e) { toast.error(e?.response?.data?.detail || "Bulk failed"); }
+    finally { setBusy(false); }
+  };
+
+  return (
+    <div className="border border-[#0A0A0B] p-6 mb-8" data-testid="bulk-invite-panel">
+      <div className="flex items-center justify-between mb-3">
+        <div>
+          <div className="overline mb-1">Bulk · CSV import</div>
+          <div className="font-display text-xl tracking-tighter font-bold">Paste CSV rows</div>
+          <p className="text-xs text-zinc-500 mt-1">Header: <span className="font-mono">discipline,consultant_name,consultant_email,consultant_company</span></p>
+        </div>
+        <button onClick={onClose} className="p-1 hover:bg-zinc-100"><XIcon size={18} weight="bold"/></button>
+      </div>
+      {disciplines.length > 0 && (
+        <div className="mb-3 text-[11px] text-zinc-500">Detected disciplines: <span className="font-mono">{disciplines.map(d => d.name).join(" · ")}</span></div>
+      )}
+      <textarea rows={8} value={text} onChange={e => setText(e.target.value)} data-testid="bulk-csv-textarea"
+        className="w-full px-3 py-3 border border-[#0A0A0B] text-xs font-mono resize-y" />
+      <div className="flex items-center justify-between mt-3">
+        <label className="flex items-center gap-2 text-sm">
+          <input type="checkbox" checked={sendEmail} onChange={e => setSendEmail(e.target.checked)} data-testid="bulk-send-email" />
+          <span>Send invitation emails via SMTP</span>
+        </label>
+        <button onClick={submit} disabled={busy} data-testid="bulk-submit-btn"
+          className="flex items-center gap-2 px-5 py-3 bg-[#0055FF] text-white text-xs font-semibold uppercase tracking-[0.15em] hover:bg-[#0A0A0B] disabled:opacity-50 transition-colors">
+          <UploadSimple size={14} weight="bold"/> {busy ? "Importing…" : "Import & create"}
+        </button>
+      </div>
+    </div>
+  );
+};
+
 
 const StatusPill = ({ status }) => {
   const cfg = {
@@ -1045,6 +1263,7 @@ const ChatTab = ({ projectId, hasDocs }) => {
   const [q, setQ] = useState("");
   const [messages, setMessages] = useState([]);
   const [busy, setBusy] = useState(false);
+  const [crossProject, setCrossProject] = useState(false);
   const submit = async (e) => {
     e.preventDefault();
     if (!q.trim()) return;
@@ -1053,16 +1272,28 @@ const ChatTab = ({ projectId, hasDocs }) => {
     setQ("");
     setBusy(true);
     try {
-      const { data } = await api.post(`/projects/${projectId}/chat`, { question });
+      const url = crossProject ? `/projects/${projectId}/chat/cross` : `/projects/${projectId}/chat`;
+      const { data } = await api.post(url, { question });
       setMessages(m => [...m, { role: "assistant", text: data.answer, sources: data.sources }]);
     } catch (e) {
       toast.error(e?.response?.data?.detail || "Chat failed");
     } finally { setBusy(false); }
   };
-  if (!hasDocs) return <div className="border border-dashed border-zinc-300 p-12 text-center text-sm text-zinc-500">Upload documents to enable chat.</div>;
+  if (!hasDocs && !crossProject) return (
+    <div className="border border-dashed border-zinc-300 p-12 text-center text-sm text-zinc-500">
+      Upload documents to enable chat — or enable <button onClick={()=>setCrossProject(true)} className="text-[#0055FF] underline">cross-RFP knowledge base search</button>.
+    </div>
+  );
   return (
     <div className="grid grid-cols-1 lg:grid-cols-3 gap-0 border border-zinc-200 min-h-[60vh]">
       <div className="lg:col-span-2 flex flex-col border-r border-zinc-200">
+        <div className="p-3 border-b border-zinc-200 flex items-center justify-between">
+          <label className="flex items-center gap-2 text-xs">
+            <input type="checkbox" checked={crossProject} onChange={e=>setCrossProject(e.target.checked)} data-testid="cross-rfp-toggle" />
+            <Globe size={12} weight="bold" className={crossProject ? "text-[#0055FF]" : "text-zinc-400"}/>
+            <span className="overline">Cross-RFP search (entire history)</span>
+          </label>
+        </div>
         <div className="flex-1 p-6 overflow-y-auto space-y-4 max-h-[60vh]">
           {messages.length === 0 && (
             <div className="text-center text-zinc-500 text-sm py-12">
