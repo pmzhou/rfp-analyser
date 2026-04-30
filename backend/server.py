@@ -276,6 +276,19 @@ async def analyze(project_id: str, user=Depends(get_current_user)):
     return p
 
 
+@api.patch("/projects/{project_id}/analysis")
+async def update_analysis(project_id: str, body: Dict[str, Any], user=Depends(get_current_user)):
+    """Human-in-the-loop QA: persist user-edited analysis fields."""
+    p = await db.projects.find_one({"id": project_id, "owner_id": user["id"]})
+    if not p:
+        raise HTTPException(404, "Project not found")
+    await db.projects.update_one(
+        {"id": project_id},
+        {"$set": {"analysis": body, "updated_at": now()}}
+    )
+    return await db.projects.find_one({"id": project_id}, {"_id": 0})
+
+
 # ---------------------- invites (sub-consultants) ---------------------- #
 @api.post("/projects/{project_id}/invites")
 async def create_invite(project_id: str, body: InviteIn, user=Depends(get_current_user)):

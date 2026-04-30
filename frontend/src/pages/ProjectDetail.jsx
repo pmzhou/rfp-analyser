@@ -6,7 +6,8 @@ import { toast } from "sonner";
 import {
   Upload, Trash, Sparkle, FileText, Calendar, ListChecks, Users,
   Money, ChatCircleText, ArrowRight, Plus, Copy, Envelope,
-  CheckCircle, XCircle, Clock, ArrowLeft, Buildings
+  CheckCircle, XCircle, Clock, ArrowLeft, Buildings,
+  PencilSimple, FloppyDisk, X as XIcon
 } from "@phosphor-icons/react";
 
 const TABS = [
@@ -53,7 +54,12 @@ const ProjectDetail = () => {
       toast.success("Analysis complete");
       setTab("analysis");
     } catch (e) {
-      toast.error(e?.response?.data?.detail || "Analysis failed");
+      const detail = e?.response?.data?.detail || e?.message || "Analysis failed";
+      const isBudget = String(detail).toLowerCase().includes("budget");
+      toast.error(detail, {
+        description: isBudget ? "Top up your Emergent Universal LLM key under Profile → Universal Key → Add Balance, then retry." : undefined,
+        duration: 10000,
+      });
     } finally { setAnalyzing(false); }
   };
 
@@ -110,7 +116,7 @@ const ProjectDetail = () => {
       <section className="px-6 lg:px-10 py-10 max-w-[1600px]">
         {tab === "overview" && <OverviewTab project={project} docs={docs} invites={invites} />}
         {tab === "documents" && <DocumentsTab projectId={id} docs={docs} setDocs={setDocs} />}
-        {tab === "analysis" && <AnalysisTab analysis={project.analysis} />}
+        {tab === "analysis" && <AnalysisTab projectId={id} analysis={project.analysis} onUpdate={(a) => setProject({...project, analysis: a})} />}
         {tab === "disciplines" && <DisciplinesTab projectId={id} project={project} invites={invites} setInvites={setInvites} />}
         {tab === "fees" && <FeesTab projectId={id} />}
         {tab === "chat" && <ChatTab projectId={id} hasDocs={docs.length>0} />}
@@ -144,6 +150,7 @@ const OverviewTab = ({ project, docs, invites }) => {
 const DocumentsTab = ({ projectId, docs, setDocs }) => {
   const inputRef = useRef();
   const [uploading, setUploading] = useState(false);
+  const [progress, setProgress] = useState({});
 
   const onUpload = async (files) => {
     if (!files?.length) return;
@@ -152,11 +159,22 @@ const DocumentsTab = ({ projectId, docs, setDocs }) => {
       const fd = new FormData();
       fd.append("file", f);
       try {
-        const { data } = await api.post(`/projects/${projectId}/documents`, fd, { headers: { "Content-Type": "multipart/form-data" }});
+        const { data } = await api.post(`/projects/${projectId}/documents`, fd, {
+          headers: { "Content-Type": "multipart/form-data" },
+          timeout: 600000,
+          maxContentLength: Infinity,
+          maxBodyLength: Infinity,
+          onUploadProgress: (evt) => {
+            if (evt.total) setProgress(p => ({ ...p, [f.name]: Math.round(100 * evt.loaded / evt.total) }));
+          },
+        });
         setDocs(prev => [...prev, data]);
+        setProgress(p => { const n = {...p}; delete n[f.name]; return n; });
         toast.success(`Uploaded ${data.filename}`);
       } catch (e) {
-        toast.error(`Failed: ${f.name}`);
+        const detail = e?.response?.data?.detail || e?.message || "Upload failed";
+        toast.error(`${f.name}: ${detail}`, { duration: 8000 });
+        setProgress(p => { const n = {...p}; delete n[f.name]; return n; });
       }
     }
     setUploading(false);
@@ -180,6 +198,21 @@ const DocumentsTab = ({ projectId, docs, setDocs }) => {
         <p className="text-xs text-zinc-500">PDF, DOCX, TXT — multiple files allowed</p>
         <input ref={inputRef} type="file" multiple accept=".pdf,.docx,.txt,.md" onChange={(e)=>onUpload(e.target.files)} className="hidden" data-testid="upload-input" />
       </div>
+      {Object.keys(progress).length > 0 && (
+        <div className="mt-4 space-y-2">
+          {Object.entries(progress).map(([name, pct]) => (
+            <div key={name} className="border border-zinc-200 p-3" data-testid={`upload-progress-${name}`}>
+              <div className="flex justify-between items-center mb-1">
+                <div className="text-xs truncate flex-1 mr-3">{name}</div>
+                <div className="font-mono text-[10px] uppercase tracking-[0.18em]">{pct}%</div>
+              </div>
+              <div className="h-1 bg-zinc-100 overflow-hidden">
+                <div className="h-full bg-[#0055FF] transition-all" style={{ width: `${pct}%` }} />
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
       <div className="mt-8 border border-zinc-200">
         {docs.length === 0 ? (
           <div className="p-8 text-center text-zinc-500 text-sm font-mono">No documents uploaded.</div>
@@ -200,8 +233,14 @@ const DocumentsTab = ({ projectId, docs, setDocs }) => {
   );
 };
 
-// ---- Analysis ---- //
-const AnalysisTab = ({ analysis }) => {
+// ---- Analysis (Human-in-the-Loop QA: every field editable) ---- //
+const AnalysisTab = ({ projectId, analysis, onUpdate }) => {
+  const [draft, setDraft] = useState(analysis);
+  const [saving, setSaving] = useState(false);
+  const [editing, setEditing] = useState(null);  // section key currently in edit mode
+
+  useEffect(() => { setDraft(analysis); }, [analysis]);
+
   if (!analysis) return (
     <div className="border border-dashed border-zinc-300 p-12 text-center">
       <Sparkle size={32} weight="thin" className="mx-auto mb-3 text-zinc-500" />
@@ -209,126 +248,329 @@ const AnalysisTab = ({ analysis }) => {
       <p className="text-sm text-zinc-500 mt-1">Upload documents and click <span className="font-semibold">Analyse RFP</span>.</p>
     </div>
   );
+
+  const dirty = JSON.stringify(draft) !== JSON.stringify(analysis);
+
+  const save = async () => {
+    setSaving(true);
+    try {
+      const { data } = await api.patch(`/projects/${projectId}/analysis`, draft);
+      onUpdate(data.analysis);
+      setEditing(null);
+      toast.success("Corrections saved");
+    } catch (e) {
+      toast.error(e?.response?.data?.detail || "Save failed");
+    } finally { setSaving(false); }
+  };
+
+  const reset = () => { setDraft(analysis); setEditing(null); };
+
+  // helpers
+  const setField = (key, val) => setDraft({ ...draft, [key]: val });
+  const updateRow = (key, idx, val) => {
+    const arr = [...(draft[key] || [])];
+    arr[idx] = val;
+    setDraft({ ...draft, [key]: arr });
+  };
+  const removeRow = (key, idx) => {
+    const arr = [...(draft[key] || [])];
+    arr.splice(idx, 1);
+    setDraft({ ...draft, [key]: arr });
+  };
+  const addRow = (key, blank) => setDraft({ ...draft, [key]: [...(draft[key] || []), blank] });
+
   return (
-    <div className="space-y-10">
-      {analysis.summary && (
-        <div className="border border-zinc-200 p-6">
-          <div className="overline mb-3">Executive Summary</div>
-          <p className="text-sm leading-relaxed">{analysis.summary}</p>
+    <div className="space-y-10" data-testid="analysis-tab">
+      {/* sticky save bar */}
+      <div className="sticky top-16 z-20 -mx-6 lg:-mx-10 px-6 lg:px-10 py-3 bg-white/90 backdrop-blur-xl border-b border-zinc-200 flex items-center justify-between" data-testid="hitl-bar">
+        <div className="flex items-center gap-2 text-xs">
+          <PencilSimple size={14} weight="bold" className="text-[#0055FF]" />
+          <span className="overline">Human-in-the-Loop QA</span>
+          {dirty && <span className="text-[10px] font-mono uppercase tracking-[0.15em] px-2 py-0.5 bg-[#FFCC00]/30 text-[#7A5E00]">Unsaved changes</span>}
         </div>
-      )}
+        <div className="flex items-center gap-2">
+          {dirty && (
+            <button onClick={reset} disabled={saving} data-testid="hitl-reset-btn"
+              className="px-3 py-2 text-[11px] uppercase tracking-[0.15em] font-semibold border border-[#0A0A0B] hover:bg-zinc-100 transition-colors">Reset</button>
+          )}
+          <button onClick={save} disabled={!dirty || saving} data-testid="hitl-save-btn"
+            className="flex items-center gap-2 px-4 py-2 bg-[#0055FF] text-white text-[11px] uppercase tracking-[0.15em] font-semibold hover:bg-[#0A0A0B] disabled:opacity-40 transition-colors">
+            <FloppyDisk size={12} weight="bold"/> {saving ? "Saving…" : "Save corrections"}
+          </button>
+        </div>
+      </div>
 
-      {analysis.scope?.length > 0 && (
-        <div>
-          <div className="overline mb-3">Scope</div>
-          <ul className="space-y-2 border-t border-zinc-200">
-            {analysis.scope.map((s, i) => (
-              <li key={i} className="flex gap-4 py-3 border-b border-zinc-200 text-sm">
-                <span className="font-mono text-xs text-zinc-500 w-8 mt-0.5">{String(i+1).padStart(2,'0')}</span>
-                <span className="flex-1">{s}</span>
-              </li>
+      {/* Summary */}
+      <Section label="Executive Summary" editing={editing==="summary"} onEdit={() => setEditing("summary")}>
+        {editing==="summary" ? (
+          <textarea rows={4} value={draft.summary || ""} onChange={e=>setField("summary", e.target.value)}
+            data-testid="edit-summary"
+            className="w-full px-3 py-3 border border-[#0055FF] focus:outline-none text-sm resize-y" />
+        ) : (
+          <p className="text-sm leading-relaxed">{draft.summary || <i className="text-zinc-400">No summary</i>}</p>
+        )}
+      </Section>
+
+      {/* Scope (string list) */}
+      <ListSection
+        label="Scope"
+        items={draft.scope || []}
+        editing={editing==="scope"}
+        onEdit={()=>setEditing("scope")}
+        onChange={(arr)=>setField("scope", arr)}
+        renderItem={(s,i,onChange)=>(
+          editing==="scope" ? (
+            <input value={s} onChange={e=>onChange(e.target.value)} data-testid={`edit-scope-${i}`}
+              className="w-full px-3 py-2 border border-[#0055FF] text-sm" />
+          ) : (
+            <span className="flex-1">{s}</span>
+          )
+        )}
+        blank={""}
+      />
+
+      {/* Key Dates */}
+      <RowsSection
+        label="Key Dates"
+        icon={<Calendar size={12} weight="bold"/>}
+        rows={draft.key_dates || []}
+        editing={editing==="key_dates"}
+        onEdit={()=>setEditing("key_dates")}
+        columns={[
+          { key: "date", label: "Date", w: "w-40", mono: true },
+          { key: "label", label: "Label" },
+          { key: "type", label: "Type", w: "w-40", select: ["submission","kickoff","milestone","interview","other"] },
+        ]}
+        onUpdate={(arr)=>setField("key_dates", arr)}
+        blank={{ date: "", label: "", type: "milestone" }}
+      />
+
+      {/* Requirements */}
+      <RowsSection
+        label={`Requirements (${(draft.requirements||[]).length})`}
+        icon={<ListChecks size={12} weight="bold"/>}
+        rows={draft.requirements || []}
+        editing={editing==="requirements"}
+        onEdit={()=>setEditing("requirements")}
+        columns={[
+          { key: "id", label: "ID", w: "w-24", mono: true },
+          { key: "category", label: "Category", w: "w-44", mono: true },
+          { key: "requirement", label: "Requirement" },
+          { key: "mandatory", label: "Mandatory", w: "w-28", bool: true },
+        ]}
+        onUpdate={(arr)=>setField("requirements", arr)}
+        blank={{ id: "", category: "", requirement: "", mandatory: false, source: "" }}
+      />
+
+      {/* Disciplines */}
+      <Section label={`Disciplines (${(draft.disciplines||[]).length})`} icon={<Users size={12} weight="bold"/>} editing={editing==="disciplines"} onEdit={()=>setEditing("disciplines")}>
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-0 border border-zinc-200">
+          {(draft.disciplines||[]).map((d,i) => (
+            <div key={i} className="p-5 border-r border-b border-zinc-200" data-testid={`discipline-${i}`}>
+              {editing==="disciplines" ? (
+                <div className="space-y-2">
+                  <input value={d.name||""} onChange={e=>updateRow("disciplines", i, {...d, name:e.target.value})}
+                    placeholder="Name" className="w-full px-2 py-1 border border-[#0055FF] text-sm font-semibold" />
+                  <input value={d.description||""} onChange={e=>updateRow("disciplines", i, {...d, description:e.target.value})}
+                    placeholder="Description" className="w-full px-2 py-1 border border-[#0055FF] text-xs" />
+                  <textarea rows={3} value={d.scope_summary||""} onChange={e=>updateRow("disciplines", i, {...d, scope_summary:e.target.value})}
+                    placeholder="Scope summary" className="w-full px-2 py-1 border border-[#0055FF] text-xs resize-y" />
+                  <button onClick={()=>removeRow("disciplines", i)} className="text-[10px] uppercase tracking-[0.15em] font-mono text-[#FF3B30]">Remove</button>
+                </div>
+              ) : (
+                <>
+                  <div className="font-display text-base font-bold tracking-tight mb-1">{d.name}</div>
+                  <div className="text-xs text-zinc-500 mb-2">{d.description}</div>
+                  <div className="text-xs text-zinc-700">{d.scope_summary}</div>
+                </>
+              )}
+            </div>
+          ))}
+          {editing==="disciplines" && (
+            <button onClick={()=>addRow("disciplines", { name: "", description: "", scope_summary: "" })}
+              data-testid="add-discipline-btn"
+              className="p-5 border-r border-b border-dashed border-zinc-300 text-sm text-zinc-500 hover:bg-zinc-50 hover:text-[#0055FF] transition-colors flex items-center justify-center gap-2">
+              <Plus size={14} weight="bold"/> Add discipline
+            </button>
+          )}
+        </div>
+      </Section>
+
+      {/* Evaluation criteria */}
+      <RowsSection
+        label="Evaluation Criteria"
+        rows={draft.evaluation_criteria || []}
+        editing={editing==="evaluation_criteria"}
+        onEdit={()=>setEditing("evaluation_criteria")}
+        columns={[
+          { key: "criterion", label: "Criterion" },
+          { key: "weight", label: "Weight", w: "w-32", mono: true, align: "right" },
+        ]}
+        onUpdate={(arr)=>setField("evaluation_criteria", arr)}
+        blank={{ criterion: "", weight: "" }}
+      />
+
+      {/* Risks */}
+      <ListSection
+        label="Risks"
+        items={draft.risks || []}
+        editing={editing==="risks"}
+        onEdit={()=>setEditing("risks")}
+        onChange={(arr)=>setField("risks", arr)}
+        prefix={<span className="font-mono text-xs text-[#FFCC00] mt-0.5">!</span>}
+        renderItem={(s,i,onChange)=>(
+          editing==="risks" ? (
+            <input value={s} onChange={e=>onChange(e.target.value)} data-testid={`edit-risk-${i}`}
+              className="w-full px-3 py-2 border border-[#0055FF] text-sm" />
+          ) : (<span>{s}</span>)
+        )}
+        blank=""
+      />
+
+      {/* Program */}
+      <RowsSection
+        label="Program / Phases"
+        rows={draft.program || []}
+        editing={editing==="program"}
+        onEdit={()=>setEditing("program")}
+        columns={[
+          { key: "phase", label: "Phase", w: "w-44" },
+          { key: "description", label: "Description" },
+          { key: "duration", label: "Duration", w: "w-32", mono: true },
+        ]}
+        onUpdate={(arr)=>setField("program", arr)}
+        blank={{ phase: "", description: "", duration: "" }}
+      />
+    </div>
+  );
+};
+
+// ---- Section primitive ---- //
+const Section = ({ label, icon, editing, onEdit, children }) => (
+  <div data-testid={`section-${label.toLowerCase().replace(/\W+/g,'-')}`}>
+    <div className="flex items-center justify-between mb-3">
+      <div className="overline flex items-center gap-2">{icon} {label}</div>
+      <button onClick={onEdit} className="flex items-center gap-1 text-[10px] uppercase tracking-[0.15em] font-semibold text-zinc-500 hover:text-[#0055FF] transition-colors">
+        <PencilSimple size={11} weight="bold"/> {editing ? "Editing" : "Edit"}
+      </button>
+    </div>
+    {editing ? (
+      <div className="border-2 border-[#0055FF] p-4 bg-[#0055FF]/5">{children}</div>
+    ) : (
+      <div className="border border-zinc-200 p-4">{children}</div>
+    )}
+  </div>
+);
+
+// ---- Editable list of strings ---- //
+const ListSection = ({ label, items, editing, onEdit, onChange, renderItem, prefix, blank }) => (
+  <div data-testid={`list-${label.toLowerCase()}`}>
+    <div className="flex items-center justify-between mb-3">
+      <div className="overline">{label}</div>
+      <button onClick={onEdit} className="flex items-center gap-1 text-[10px] uppercase tracking-[0.15em] font-semibold text-zinc-500 hover:text-[#0055FF] transition-colors">
+        <PencilSimple size={11} weight="bold"/> {editing ? "Editing" : "Edit"}
+      </button>
+    </div>
+    <ul className={`border-t ${editing ? 'border-[#0055FF]' : 'border-zinc-200'}`}>
+      {items.map((s,i) => (
+        <li key={i} className={`flex gap-3 py-3 border-b text-sm items-center ${editing ? 'border-[#0055FF]/30 bg-[#0055FF]/5 px-3' : 'border-zinc-200'}`}>
+          {prefix || <span className="font-mono text-xs text-zinc-500 w-8 mt-0.5">{String(i+1).padStart(2,'0')}</span>}
+          {renderItem(s, i, (val) => { const a=[...items]; a[i]=val; onChange(a); })}
+          {editing && (
+            <button onClick={()=>{ const a=[...items]; a.splice(i,1); onChange(a); }}
+              data-testid={`remove-${label.toLowerCase()}-${i}`}
+              className="p-1 text-zinc-400 hover:text-[#FF3B30]"><Trash size={12} weight="bold"/></button>
+          )}
+        </li>
+      ))}
+      {editing && (
+        <li className="py-2 px-3 border-b border-[#0055FF]/30 bg-[#0055FF]/5">
+          <button onClick={()=>onChange([...items, blank])}
+            data-testid={`add-${label.toLowerCase()}-btn`}
+            className="text-[11px] uppercase tracking-[0.15em] font-semibold text-[#0055FF] hover:text-[#0A0A0B] transition-colors flex items-center gap-1">
+            <Plus size={12} weight="bold"/> Add item
+          </button>
+        </li>
+      )}
+    </ul>
+  </div>
+);
+
+// ---- Editable rows table ---- //
+const RowsSection = ({ label, icon, rows, editing, onEdit, columns, onUpdate, blank }) => {
+  const update = (i, key, val) => { const a=[...rows]; a[i] = {...a[i], [key]: val}; onUpdate(a); };
+  const remove = (i) => { const a=[...rows]; a.splice(i,1); onUpdate(a); };
+  return (
+    <div data-testid={`rows-${label.toLowerCase().replace(/\W+/g,'-')}`}>
+      <div className="flex items-center justify-between mb-3">
+        <div className="overline flex items-center gap-2">{icon} {label}</div>
+        <button onClick={onEdit} className="flex items-center gap-1 text-[10px] uppercase tracking-[0.15em] font-semibold text-zinc-500 hover:text-[#0055FF] transition-colors">
+          <PencilSimple size={11} weight="bold"/> {editing ? "Editing" : "Edit"}
+        </button>
+      </div>
+      <table className={`w-full border ${editing ? 'border-[#0055FF]' : 'border-zinc-200'}`}>
+        <thead>
+          <tr className={`${editing ? 'bg-[#0055FF]/5' : 'bg-zinc-50'} border-b ${editing ? 'border-[#0055FF]/30' : 'border-zinc-200'} text-[10px] uppercase tracking-[0.18em] text-zinc-500`}>
+            {columns.map(c => (
+              <th key={c.key} className={`text-${c.align||'left'} px-4 py-3 font-semibold ${c.w||''}`}>{c.label}</th>
             ))}
-          </ul>
-        </div>
-      )}
-
-      {analysis.key_dates?.length > 0 && (
-        <div>
-          <div className="overline mb-3 flex items-center gap-2"><Calendar size={12} weight="bold"/> Key Dates</div>
-          <table className="w-full border border-zinc-200">
-            <thead>
-              <tr className="bg-zinc-50 border-b border-zinc-200 text-[10px] uppercase tracking-[0.18em] text-zinc-500">
-                <th className="text-left px-4 py-3 font-semibold">Date</th>
-                <th className="text-left px-4 py-3 font-semibold">Label</th>
-                <th className="text-left px-4 py-3 font-semibold">Type</th>
-              </tr>
-            </thead>
-            <tbody>
-              {analysis.key_dates.map((d,i) => (
-                <tr key={i} className="border-b border-zinc-200 last:border-b-0">
-                  <td className="px-4 py-3 font-mono text-xs">{d.date}</td>
-                  <td className="px-4 py-3 text-sm">{d.label}</td>
-                  <td className="px-4 py-3"><span className="text-[10px] uppercase tracking-[0.15em] font-mono px-2 py-0.5 bg-zinc-100">{d.type}</span></td>
-                </tr>
+            {editing && <th className="w-12"></th>}
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((r,i) => (
+            <tr key={i} className="border-b border-zinc-200 last:border-b-0" data-testid={`row-${label.toLowerCase().replace(/\W+/g,'-')}-${i}`}>
+              {columns.map(c => (
+                <td key={c.key} className={`px-4 py-3 ${c.mono ? 'font-mono text-xs' : 'text-sm'} text-${c.align||'left'}`}>
+                  {editing ? (
+                    c.bool ? (
+                      <select value={r[c.key] ? "yes" : "no"} onChange={e=>update(i, c.key, e.target.value==="yes")}
+                        data-testid={`edit-${c.key}-${i}`}
+                        className="px-2 py-1 border border-[#0055FF] text-xs bg-white">
+                        <option value="yes">Yes</option><option value="no">No</option>
+                      </select>
+                    ) : c.select ? (
+                      <select value={r[c.key]||""} onChange={e=>update(i, c.key, e.target.value)}
+                        data-testid={`edit-${c.key}-${i}`}
+                        className="px-2 py-1 border border-[#0055FF] text-xs bg-white">
+                        {c.select.map(o => <option key={o}>{o}</option>)}
+                      </select>
+                    ) : (
+                      <input value={r[c.key] ?? ""} onChange={e=>update(i, c.key, e.target.value)}
+                        data-testid={`edit-${c.key}-${i}`}
+                        className={`w-full px-2 py-1 border border-[#0055FF] ${c.mono?'font-mono text-xs':'text-sm'}`} />
+                    )
+                  ) : (
+                    c.bool ? (
+                      r[c.key]
+                        ? <span className="text-[10px] uppercase tracking-[0.15em] font-mono px-2 py-0.5 bg-[#FF3B30] text-white">Yes</span>
+                        : <span className="text-[10px] uppercase tracking-[0.15em] font-mono px-2 py-0.5 bg-zinc-100">Optional</span>
+                    ) : (
+                      <span>{r[c.key] || (c.key==="id" ? `R-${String(i+1).padStart(3,'0')}` : "—")}</span>
+                    )
+                  )}
+                </td>
               ))}
-            </tbody>
-          </table>
-        </div>
-      )}
-
-      {analysis.requirements?.length > 0 && (
-        <div>
-          <div className="overline mb-3 flex items-center gap-2"><ListChecks size={12} weight="bold"/> Requirements ({analysis.requirements.length})</div>
-          <table className="w-full border border-zinc-200">
-            <thead>
-              <tr className="bg-zinc-50 border-b border-zinc-200 text-[10px] uppercase tracking-[0.18em] text-zinc-500">
-                <th className="text-left px-4 py-3 font-semibold w-16">ID</th>
-                <th className="text-left px-4 py-3 font-semibold w-40">Category</th>
-                <th className="text-left px-4 py-3 font-semibold">Requirement</th>
-                <th className="text-left px-4 py-3 font-semibold w-24">Mandatory</th>
-              </tr>
-            </thead>
-            <tbody>
-              {analysis.requirements.map((r,i) => (
-                <tr key={i} className="border-b border-zinc-200 last:border-b-0 hover:bg-zinc-50">
-                  <td className="px-4 py-3 font-mono text-xs">{r.id || `R-${String(i+1).padStart(3,'0')}`}</td>
-                  <td className="px-4 py-3 text-xs uppercase tracking-[0.15em] font-mono">{r.category}</td>
-                  <td className="px-4 py-3 text-sm">{r.requirement}</td>
-                  <td className="px-4 py-3">{r.mandatory
-                    ? <span className="text-[10px] uppercase tracking-[0.15em] font-mono px-2 py-0.5 bg-[#FF3B30] text-white">Yes</span>
-                    : <span className="text-[10px] uppercase tracking-[0.15em] font-mono px-2 py-0.5 bg-zinc-100">Optional</span>}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
-
-      {analysis.disciplines?.length > 0 && (
-        <div>
-          <div className="overline mb-3 flex items-center gap-2"><Users size={12} weight="bold"/> Disciplines ({analysis.disciplines.length})</div>
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-0 border border-zinc-200">
-            {analysis.disciplines.map((d,i) => (
-              <div key={i} className="p-5 border-r border-b border-zinc-200">
-                <div className="font-display text-base font-bold tracking-tight mb-1">{d.name}</div>
-                <div className="text-xs text-zinc-500 mb-2">{d.description}</div>
-                <div className="text-xs text-zinc-700">{d.scope_summary}</div>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {analysis.evaluation_criteria?.length > 0 && (
-        <div>
-          <div className="overline mb-3">Evaluation Criteria</div>
-          <table className="w-full border border-zinc-200">
-            <tbody>
-              {analysis.evaluation_criteria.map((c,i) => (
-                <tr key={i} className="border-b border-zinc-200 last:border-b-0">
-                  <td className="px-4 py-3 text-sm flex-1">{c.criterion}</td>
-                  <td className="px-4 py-3 font-mono text-xs text-right w-24">{c.weight}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
-
-      {analysis.risks?.length > 0 && (
-        <div>
-          <div className="overline mb-3">Risks</div>
-          <ul className="border-t border-zinc-200">
-            {analysis.risks.map((r,i) => (
-              <li key={i} className="py-3 border-b border-zinc-200 text-sm flex gap-4">
-                <span className="font-mono text-xs text-[#FFCC00] mt-0.5">!</span>
-                <span>{r}</span>
-              </li>
-            ))}
-          </ul>
-        </div>
-      )}
+              {editing && (
+                <td className="px-2 py-3 text-right">
+                  <button onClick={()=>remove(i)} data-testid={`remove-row-${i}`} className="p-1 text-zinc-400 hover:text-[#FF3B30]">
+                    <Trash size={12} weight="bold"/>
+                  </button>
+                </td>
+              )}
+            </tr>
+          ))}
+          {editing && (
+            <tr><td colSpan={columns.length+1} className="px-4 py-3 bg-[#0055FF]/5 border-b border-[#0055FF]/30">
+              <button onClick={()=>onUpdate([...rows, blank])}
+                data-testid={`add-row-${label.toLowerCase().replace(/\W+/g,'-')}`}
+                className="text-[11px] uppercase tracking-[0.15em] font-semibold text-[#0055FF] hover:text-[#0A0A0B] transition-colors flex items-center gap-1">
+                <Plus size={12} weight="bold"/> Add row
+              </button>
+            </td></tr>
+          )}
+        </tbody>
+      </table>
     </div>
   );
 };
