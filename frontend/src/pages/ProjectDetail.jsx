@@ -8,14 +8,16 @@ import {
   Money, ChatCircleText, ArrowRight, Plus, Copy, Envelope,
   CheckCircle, XCircle, Clock, ArrowLeft, Buildings,
   PencilSimple, FloppyDisk, X as XIcon,
-  Copy as CopyIcon, FilePdf, FileXls, Trophy, Books, Eye, Warning, Globe, Receipt, PaperPlaneTilt, UploadSimple
+  Copy as CopyIcon, FilePdf, FileXls, Trophy, Books, Eye, Warning, Globe, Receipt, PaperPlaneTilt, UploadSimple, Calculator
 } from "@phosphor-icons/react";
+import FeeBuilder from "@/pages/FeeBuilder";
 
 const TABS = [
   { id: "overview", label: "Overview", icon: Buildings },
   { id: "documents", label: "Documents", icon: FileText },
   { id: "analysis", label: "Analysis", icon: ListChecks },
   { id: "disciplines", label: "Disciplines", icon: Users },
+  { id: "fee_builder", label: "Fee Builder", icon: Calculator },
   { id: "fees", label: "Fee Merger", icon: Money },
   { id: "chat", label: "Chat", icon: ChatCircleText },
 ];
@@ -167,6 +169,7 @@ const ProjectDetail = () => {
         {tab === "documents" && <DocumentsTab projectId={id} docs={docs} setDocs={setDocs} />}
         {tab === "analysis" && <AnalysisTab projectId={id} analysis={project.analysis} onUpdate={(a) => setProject({...project, analysis: a})} />}
         {tab === "disciplines" && <DisciplinesTab projectId={id} project={project} invites={invites} setInvites={setInvites} />}
+        {tab === "fee_builder" && <FeeBuilder project={project} onUpdate={(p) => setProject(p)} />}
         {tab === "fees" && <FeesTab projectId={id} />}
         {tab === "chat" && <ChatTab projectId={id} hasDocs={docs.length>0} />}
       </section>

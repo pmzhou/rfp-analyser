@@ -302,6 +302,18 @@ async def analyze(project_id: str, user=Depends(get_current_user)):
     return p
 
 
+@api.patch("/projects/{project_id}/fee-builder")
+async def update_fee_builder(project_id: str, body: Dict[str, Any], user=Depends(get_current_user)):
+    p = await db.projects.find_one({"id": project_id, "owner_id": user["id"]})
+    if not p:
+        raise HTTPException(404, "Project not found")
+    await db.projects.update_one(
+        {"id": project_id},
+        {"$set": {"fee_builder": body, "updated_at": now()}}
+    )
+    return await db.projects.find_one({"id": project_id}, {"_id": 0})
+
+
 @api.patch("/projects/{project_id}/analysis")
 async def update_analysis(project_id: str, body: Dict[str, Any], user=Depends(get_current_user)):
     """Human-in-the-loop QA: persist user-edited analysis fields, audit-logged."""
@@ -487,7 +499,7 @@ async def test_email(body: TestEmailIn, user=Depends(get_current_user)):
 
 # ---------------------- library: requirements / fee templates / contacts ---------------------- #
 class LibraryItemIn(BaseModel):
-    type: str                           # requirement | fee_template | contact
+    type: str                           # requirement | fee_template | contact | staff
     # requirement fields
     category: Optional[str] = ""
     requirement: Optional[str] = ""
@@ -495,7 +507,7 @@ class LibraryItemIn(BaseModel):
     auto_inject: Optional[bool] = False
     # fee_template fields
     discipline: Optional[str] = ""
-    fee_format: Optional[str] = ""      # lump sum | hourly | per-deliverable | mixed
+    fee_format: Optional[str] = ""
     base_fee: Optional[float] = 0.0
     currency: Optional[str] = "USD"
     template_notes: Optional[str] = ""
@@ -504,14 +516,22 @@ class LibraryItemIn(BaseModel):
     consultant_email: Optional[str] = ""
     consultant_company: Optional[str] = ""
     contact_disciplines: Optional[List[str]] = []
+    # staff fields (global staff roster)
+    staff_name: Optional[str] = ""
+    staff_title: Optional[str] = ""
+    staff_dept: Optional[str] = ""           # arch | int | ca | site
+    staff_group: Optional[str] = ""          # Directors | Senior | Mid | Junior | etc
+    cost_rate: Optional[float] = 0.0
+    rate_currency: Optional[str] = "USD"
+    active: Optional[bool] = True
 
 
 @api.get("/library")
 async def list_library(type: str = Query(...), user=Depends(get_current_user)):
-    if type not in ("requirement", "fee_template", "contact"):
+    if type not in ("requirement", "fee_template", "contact", "staff"):
         raise HTTPException(400, "Invalid type")
     cursor = db.library.find({"owner_id": user["id"], "type": type}, {"_id": 0}).sort("created_at", -1)
-    return await cursor.to_list(1000)
+    return await cursor.to_list(2000)
 
 
 @api.post("/library")

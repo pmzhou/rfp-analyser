@@ -2,7 +2,7 @@ import React, { useEffect, useState } from "react";
 import { api } from "@/lib/api";
 import Layout from "@/components/Layout";
 import { toast } from "sonner";
-import { EnvelopeSimple, Robot, Books, Receipt, Users as UsersIcon, FloppyDisk, Plus, Trash, PaperPlaneRight, ArrowLeft } from "@phosphor-icons/react";
+import { EnvelopeSimple, Robot, Books, Receipt, Users as UsersIcon, IdentificationCard, FloppyDisk, Plus, Trash, PaperPlaneRight, ArrowLeft } from "@phosphor-icons/react";
 import { Link } from "react-router-dom";
 
 const TABS = [
@@ -10,6 +10,7 @@ const TABS = [
   { id: "llm", label: "LLM Models", icon: Robot },
   { id: "requirements", label: "Requirements Library", icon: Books },
   { id: "fees", label: "Fee Templates", icon: Receipt },
+  { id: "staff", label: "Staff Roster", icon: IdentificationCard },
   { id: "contacts", label: "Address Book", icon: UsersIcon },
 ];
 
@@ -42,6 +43,7 @@ const Settings = () => {
         {tab === "llm" && <LLMTab />}
         {tab === "requirements" && <LibraryTab type="requirement" />}
         {tab === "fees" && <LibraryTab type="fee_template" />}
+        {tab === "staff" && <LibraryTab type="staff" />}
         {tab === "contacts" && <LibraryTab type="contact" />}
       </section>
     </Layout>
@@ -266,10 +268,11 @@ const LibraryTab = ({ type }) => {
     catch { toast.error("Failed"); }
   };
 
-  const titleMap = { requirement: "Custom Requirements", fee_template: "Fee Templates", contact: "Sub-consultant Address Book" };
+  const titleMap = { requirement: "Custom Requirements", fee_template: "Fee Templates", staff: "Staff Roster", contact: "Sub-consultant Address Book" };
   const descMap = {
     requirement: "Boilerplate or firm-specific requirements. Toggle 'Auto-inject' to make Claude check every new RFP for these.",
     fee_template: "Save fee structures per discipline. Pre-fills sub-consultant invites.",
+    staff: "Global employee roster used by the Fee Builder. Add employees once, toggle on/off per project.",
     contact: "Reusable contacts. Pick from this list when creating invites.",
   };
 
@@ -335,6 +338,31 @@ const LibraryTab = ({ type }) => {
                 placeholder="Structural, MEP" />
             </>
           )}
+          {type === "staff" && (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <Field label="Name" testid="staff-name" value={draft.staff_name} onChange={v=>setDraft({...draft, staff_name: v})} />
+              <Field label="Title" testid="staff-title" value={draft.staff_title} onChange={v=>setDraft({...draft, staff_title: v})} placeholder="e.g. Senior Architect" />
+              <div>
+                <label className="overline block mb-2">Department</label>
+                <select value={draft.staff_dept} onChange={e=>setDraft({...draft, staff_dept: e.target.value})} data-testid="staff-dept"
+                  className="w-full px-3 py-3 border border-[#0A0A0B] text-sm bg-white">
+                  <option value="arch">Architecture</option>
+                  <option value="int">Interiors</option>
+                  <option value="ca">Construction Administration</option>
+                  <option value="site">Site / Supervision</option>
+                  <option value="struct">Structural</option>
+                  <option value="mep">MEP</option>
+                  <option value="other">Other</option>
+                </select>
+              </div>
+              <Field label="Group" testid="staff-group" value={draft.staff_group} onChange={v=>setDraft({...draft, staff_group: v})} placeholder="Directors / Senior / Mid / Junior" />
+              <Field label="Cost rate per hour" testid="staff-rate" type="number" value={draft.cost_rate} onChange={v=>setDraft({...draft, cost_rate: parseFloat(v)||0})} />
+              <Field label="Currency" testid="staff-currency" value={draft.rate_currency} onChange={v=>setDraft({...draft, rate_currency: v.toUpperCase()})} />
+              <label className="md:col-span-2 flex items-center gap-2 text-sm">
+                <input type="checkbox" checked={draft.active!==false} onChange={e=>setDraft({...draft, active: e.target.checked})} data-testid="staff-active" /> Active in roster
+              </label>
+            </div>
+          )}
           <div className="flex gap-2 pt-2 border-t border-zinc-200">
             <button onClick={save} data-testid="library-save-btn" className="px-5 py-3 bg-[#0055FF] text-white text-xs font-semibold uppercase tracking-[0.15em] hover:bg-[#0A0A0B] transition-colors">Save</button>
             <button onClick={()=>setDraft(null)} className="px-5 py-3 border border-[#0A0A0B] text-xs font-semibold uppercase tracking-[0.15em] hover:bg-zinc-100 transition-colors">Cancel</button>
@@ -374,6 +402,15 @@ const LibraryTab = ({ type }) => {
                   <div className="lg:col-span-3"><div className="overline mb-1">Email</div><div className="text-sm">{i.consultant_email}</div></div>
                   <div className="lg:col-span-3"><div className="overline mb-1">Company</div><div className="text-sm">{i.consultant_company||"—"}</div></div>
                   <div className="lg:col-span-2"><div className="overline mb-1">Disciplines</div><div className="text-xs">{(i.contact_disciplines||[]).join(", ")||"—"}</div></div>
+                </>
+              )}
+              {type === "staff" && (
+                <>
+                  <div className="lg:col-span-3"><div className="overline mb-1">Name</div><div className="text-sm font-medium">{i.staff_name}</div><div className="text-xs text-zinc-500">{i.staff_title||"—"}</div></div>
+                  <div className="lg:col-span-2"><div className="overline mb-1">Dept</div><div className="text-xs uppercase tracking-[0.15em] font-mono">{i.staff_dept}</div></div>
+                  <div className="lg:col-span-2"><div className="overline mb-1">Group</div><div className="text-sm">{i.staff_group||"—"}</div></div>
+                  <div className="lg:col-span-3"><div className="overline mb-1">Rate</div><div className="font-mono text-sm">{i.rate_currency} {Number(i.cost_rate||0).toLocaleString()} /hr</div></div>
+                  <div className="lg:col-span-1">{i.active!==false ? <span className="text-[10px] uppercase tracking-[0.15em] font-mono px-2 py-0.5 bg-[#00C35A]/15 text-[#007A38]">Active</span> : <span className="text-[10px] uppercase tracking-[0.15em] font-mono px-2 py-0.5 bg-zinc-100">Off</span>}</div>
                 </>
               )}
               <div className="lg:col-span-1 flex justify-end gap-1">
