@@ -2,10 +2,12 @@ import React, { useEffect, useState } from "react";
 import { api } from "@/lib/api";
 import Layout from "@/components/Layout";
 import { toast } from "sonner";
-import { EnvelopeSimple, Robot, Books, Receipt, Users as UsersIcon, IdentificationCard, FloppyDisk, Plus, Trash, PaperPlaneRight, ArrowLeft } from "@phosphor-icons/react";
+import { EnvelopeSimple, Robot, Books, Receipt, Users as UsersIcon, IdentificationCard, FloppyDisk, Plus, Trash, PaperPlaneRight, ArrowLeft, Sliders } from "@phosphor-icons/react";
 import { Link } from "react-router-dom";
+import { usePrefs } from "@/contexts/PrefsContext";
 
 const TABS = [
+  { id: "prefs", label: "Preferences", icon: Sliders },
   { id: "smtp", label: "SMTP", icon: EnvelopeSimple },
   { id: "llm", label: "LLM Models", icon: Robot },
   { id: "requirements", label: "Requirements Library", icon: Books },
@@ -15,7 +17,7 @@ const TABS = [
 ];
 
 const Settings = () => {
-  const [tab, setTab] = useState("smtp");
+  const [tab, setTab] = useState("prefs");
   return (
     <Layout>
       <section className="border-b border-zinc-200">
@@ -39,6 +41,7 @@ const Settings = () => {
         </div>
       </section>
       <section className="px-6 lg:px-10 py-10 max-w-[1600px]">
+        {tab === "prefs" && <PrefsTab />}
         {tab === "smtp" && <SMTPTab />}
         {tab === "llm" && <LLMTab />}
         {tab === "requirements" && <LibraryTab type="requirement" />}
@@ -47,6 +50,65 @@ const Settings = () => {
         {tab === "contacts" && <LibraryTab type="contact" />}
       </section>
     </Layout>
+  );
+};
+
+// ---------- Preferences ---------- //
+const CURRENCIES = ["AED","USD","EUR","GBP","SAR","SGD","AUD","CAD","INR","JPY","CHF","CNY"];
+
+const PrefsTab = () => {
+  const { refresh } = usePrefs();
+  const [s, setS] = useState(null);
+  const [busy, setBusy] = useState(false);
+  useEffect(() => { api.get("/settings").then(r => setS(r.data)); }, []);
+
+  const save = async () => {
+    setBusy(true);
+    try {
+      await api.put("/settings", {
+        default_currency: s.default_currency || "AED",
+        date_format: s.date_format || "dd/mm/yyyy",
+      });
+      await refresh();
+      toast.success("Preferences saved");
+    } catch (e) { toast.error("Failed to save"); }
+    finally { setBusy(false); }
+  };
+
+  if (!s) return <div className="text-zinc-500 font-mono text-sm">Loading…</div>;
+
+  return (
+    <div className="max-w-2xl space-y-6">
+      <div>
+        <div className="overline mb-2">Workspace · Preferences</div>
+        <p className="text-sm text-zinc-600 max-w-xl">Defaults applied across new projects, the Fee Builder, and exports.</p>
+      </div>
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <div>
+          <label className="overline block mb-2">Default currency</label>
+          <select value={s.default_currency || "AED"} onChange={e=>setS({...s, default_currency: e.target.value})} data-testid="pref-currency"
+            className="w-full px-3 py-3 border border-[#0A0A0B] text-sm bg-white font-mono">
+            {CURRENCIES.map(c => <option key={c}>{c}</option>)}
+          </select>
+          <p className="text-[10px] uppercase tracking-[0.18em] text-zinc-500 mt-1">UAE Dirham = AED. Use the new official symbol د.إ in PDF/Excel exports if your font supports it.</p>
+        </div>
+        <div>
+          <label className="overline block mb-2">Date format</label>
+          <select value={s.date_format || "dd/mm/yyyy"} onChange={e=>setS({...s, date_format: e.target.value})} data-testid="pref-date-format"
+            className="w-full px-3 py-3 border border-[#0A0A0B] text-sm bg-white font-mono">
+            <option value="dd/mm/yyyy">dd/mm/yyyy (UK / EU / UAE)</option>
+            <option value="mm/dd/yyyy">mm/dd/yyyy (US)</option>
+            <option value="yyyy-mm-dd">yyyy-mm-dd (ISO)</option>
+          </select>
+        </div>
+      </div>
+      <div className="pt-3 border-t border-zinc-200">
+        <button onClick={save} disabled={busy} data-testid="pref-save-btn"
+          className="flex items-center gap-2 px-5 py-3 bg-[#0055FF] text-white text-xs font-semibold uppercase tracking-[0.15em] hover:bg-[#0A0A0B] disabled:opacity-50 transition-colors">
+          <FloppyDisk size={14} weight="bold"/> {busy ? "Saving…" : "Save preferences"}
+        </button>
+      </div>
+    </div>
   );
 };
 

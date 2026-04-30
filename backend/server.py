@@ -420,19 +420,22 @@ async def get_document_file(project_id: str, document_id: str, user=Depends(get_
 
 # ---------------------- settings ---------------------- #
 class SettingsIn(BaseModel):
+    # Preferences
+    default_currency: Optional[str] = "AED"
+    date_format: Optional[str] = "dd/mm/yyyy"
     # SMTP
     smtp_host: Optional[str] = ""
     smtp_port: Optional[int] = 587
     smtp_username: Optional[str] = ""
-    smtp_password: Optional[str] = None       # if None -> keep existing; if "" -> clear
+    smtp_password: Optional[str] = None
     smtp_use_tls: Optional[bool] = True
     smtp_from_name: Optional[str] = ""
     smtp_from_email: Optional[str] = ""
     # LLM
-    llm_provider: Optional[str] = "anthropic"          # anthropic | openai | gemini | custom
+    llm_provider: Optional[str] = "anthropic"
     llm_model: Optional[str] = "claude-sonnet-4-5-20250929"
-    llm_api_key: Optional[str] = None                  # None=keep, ""=clear
-    llm_base_url: Optional[str] = ""                   # for custom OpenAI-compatible endpoints
+    llm_api_key: Optional[str] = None
+    llm_base_url: Optional[str] = ""
 
 
 def _public_settings(s: Dict[str, Any]) -> Dict[str, Any]:
@@ -454,7 +457,8 @@ async def put_settings(body: SettingsIn, user=Depends(get_current_user)):
     existing = await db.settings.find_one({"user_id": user["id"]}) or {}
     upd: Dict[str, Any] = {"user_id": user["id"], "updated_at": now()}
     # plain fields
-    for k in ("smtp_host","smtp_port","smtp_username","smtp_use_tls","smtp_from_name","smtp_from_email",
+    for k in ("default_currency","date_format",
+              "smtp_host","smtp_port","smtp_username","smtp_use_tls","smtp_from_name","smtp_from_email",
               "llm_provider","llm_model","llm_base_url"):
         v = getattr(body, k)
         if v is not None:
