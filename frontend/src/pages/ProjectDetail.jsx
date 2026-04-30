@@ -280,7 +280,7 @@ const AnalysisTab = ({ projectId, analysis, onUpdate }) => {
   const addRow = (key, blank) => setDraft({ ...draft, [key]: [...(draft[key] || []), blank] });
 
   return (
-    <div className="space-y-10" data-testid="analysis-tab">
+    <div className="space-y-6" data-testid="analysis-tab">
       {/* sticky save bar */}
       <div className="sticky top-16 z-20 -mx-6 lg:-mx-10 px-6 lg:px-10 py-3 bg-white/90 backdrop-blur-xl border-b border-zinc-200 flex items-center justify-between" data-testid="hitl-bar">
         <div className="flex items-center gap-2 text-xs">
@@ -300,150 +300,246 @@ const AnalysisTab = ({ projectId, analysis, onUpdate }) => {
         </div>
       </div>
 
-      {/* Summary */}
-      <Section label="Executive Summary" editing={editing==="summary"} onEdit={() => setEditing("summary")}>
-        {editing==="summary" ? (
-          <textarea rows={4} value={draft.summary || ""} onChange={e=>setField("summary", e.target.value)}
-            data-testid="edit-summary"
-            className="w-full px-3 py-3 border border-[#0055FF] focus:outline-none text-sm resize-y" />
-        ) : (
-          <p className="text-sm leading-relaxed">{draft.summary || <i className="text-zinc-400">No summary</i>}</p>
-        )}
-      </Section>
-
-      {/* Scope (string list) */}
-      <ListSection
-        label="Scope"
-        items={draft.scope || []}
-        editing={editing==="scope"}
-        onEdit={()=>setEditing("scope")}
-        onChange={(arr)=>setField("scope", arr)}
-        renderItem={(s,i,onChange)=>(
-          editing==="scope" ? (
-            <input value={s} onChange={e=>onChange(e.target.value)} data-testid={`edit-scope-${i}`}
-              className="w-full px-3 py-2 border border-[#0055FF] text-sm" />
+      {/* ===== GROUP A: OVERVIEW ===== */}
+      <Group label="A · Overview">
+        <Section label="Executive Summary" editing={editing==="summary"} onEdit={() => setEditing("summary")}>
+          {editing==="summary" ? (
+            <textarea rows={4} value={draft.summary || ""} onChange={e=>setField("summary", e.target.value)}
+              data-testid="edit-summary" className="w-full px-3 py-3 border border-[#0055FF] focus:outline-none text-sm resize-y" />
           ) : (
-            <span className="flex-1">{s}</span>
-          )
-        )}
-        blank={""}
-      />
-
-      {/* Key Dates */}
-      <RowsSection
-        label="Key Dates"
-        icon={<Calendar size={12} weight="bold"/>}
-        rows={draft.key_dates || []}
-        editing={editing==="key_dates"}
-        onEdit={()=>setEditing("key_dates")}
-        columns={[
-          { key: "date", label: "Date", w: "w-40", mono: true },
-          { key: "label", label: "Label" },
-          { key: "type", label: "Type", w: "w-40", select: ["submission","kickoff","milestone","interview","other"] },
-        ]}
-        onUpdate={(arr)=>setField("key_dates", arr)}
-        blank={{ date: "", label: "", type: "milestone" }}
-      />
-
-      {/* Requirements */}
-      <RowsSection
-        label={`Requirements (${(draft.requirements||[]).length})`}
-        icon={<ListChecks size={12} weight="bold"/>}
-        rows={draft.requirements || []}
-        editing={editing==="requirements"}
-        onEdit={()=>setEditing("requirements")}
-        columns={[
-          { key: "id", label: "ID", w: "w-24", mono: true },
-          { key: "category", label: "Category", w: "w-44", mono: true },
-          { key: "requirement", label: "Requirement" },
-          { key: "mandatory", label: "Mandatory", w: "w-28", bool: true },
-        ]}
-        onUpdate={(arr)=>setField("requirements", arr)}
-        blank={{ id: "", category: "", requirement: "", mandatory: false, source: "" }}
-      />
-
-      {/* Disciplines */}
-      <Section label={`Disciplines (${(draft.disciplines||[]).length})`} icon={<Users size={12} weight="bold"/>} editing={editing==="disciplines"} onEdit={()=>setEditing("disciplines")}>
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-0 border border-zinc-200">
-          {(draft.disciplines||[]).map((d,i) => (
-            <div key={i} className="p-5 border-r border-b border-zinc-200" data-testid={`discipline-${i}`}>
-              {editing==="disciplines" ? (
-                <div className="space-y-2">
-                  <input value={d.name||""} onChange={e=>updateRow("disciplines", i, {...d, name:e.target.value})}
-                    placeholder="Name" className="w-full px-2 py-1 border border-[#0055FF] text-sm font-semibold" />
-                  <input value={d.description||""} onChange={e=>updateRow("disciplines", i, {...d, description:e.target.value})}
-                    placeholder="Description" className="w-full px-2 py-1 border border-[#0055FF] text-xs" />
-                  <textarea rows={3} value={d.scope_summary||""} onChange={e=>updateRow("disciplines", i, {...d, scope_summary:e.target.value})}
-                    placeholder="Scope summary" className="w-full px-2 py-1 border border-[#0055FF] text-xs resize-y" />
-                  <button onClick={()=>removeRow("disciplines", i)} className="text-[10px] uppercase tracking-[0.15em] font-mono text-[#FF3B30]">Remove</button>
-                </div>
-              ) : (
-                <>
-                  <div className="font-display text-base font-bold tracking-tight mb-1">{d.name}</div>
-                  <div className="text-xs text-zinc-500 mb-2">{d.description}</div>
-                  <div className="text-xs text-zinc-700">{d.scope_summary}</div>
-                </>
-              )}
-            </div>
-          ))}
-          {editing==="disciplines" && (
-            <button onClick={()=>addRow("disciplines", { name: "", description: "", scope_summary: "" })}
-              data-testid="add-discipline-btn"
-              className="p-5 border-r border-b border-dashed border-zinc-300 text-sm text-zinc-500 hover:bg-zinc-50 hover:text-[#0055FF] transition-colors flex items-center justify-center gap-2">
-              <Plus size={14} weight="bold"/> Add discipline
-            </button>
+            <p className="text-sm leading-relaxed">{draft.summary || <i className="text-zinc-400">No summary</i>}</p>
           )}
-        </div>
-      </Section>
+        </Section>
+        <Section label="Project Objectives" editing={editing==="project_objectives"} onEdit={() => setEditing("project_objectives")}>
+          {editing==="project_objectives" ? (
+            <textarea rows={4} value={draft.project_objectives || ""} onChange={e=>setField("project_objectives", e.target.value)}
+              data-testid="edit-project-objectives" className="w-full px-3 py-3 border border-[#0055FF] focus:outline-none text-sm resize-y" />
+          ) : (
+            <p className="text-sm leading-relaxed">{draft.project_objectives || <i className="text-zinc-400">Not extracted</i>}</p>
+          )}
+        </Section>
+      </Group>
 
-      {/* Evaluation criteria */}
-      <RowsSection
-        label="Evaluation Criteria"
-        rows={draft.evaluation_criteria || []}
-        editing={editing==="evaluation_criteria"}
-        onEdit={()=>setEditing("evaluation_criteria")}
-        columns={[
-          { key: "criterion", label: "Criterion" },
-          { key: "weight", label: "Weight", w: "w-32", mono: true, align: "right" },
-        ]}
-        onUpdate={(arr)=>setField("evaluation_criteria", arr)}
-        blank={{ criterion: "", weight: "" }}
-      />
+      {/* ===== GROUP B: SCOPE OF WORK ===== */}
+      <Group label="B · Scope of Work">
+        <ListSection label="Scope" items={draft.scope || []} editing={editing==="scope"}
+          onEdit={()=>setEditing("scope")} onChange={(arr)=>setField("scope", arr)}
+          renderItem={(s,i,onChange)=> editing==="scope"
+            ? <input value={s} onChange={e=>onChange(e.target.value)} data-testid={`edit-scope-${i}`} className="w-full px-3 py-2 border border-[#0055FF] text-sm" />
+            : <span className="flex-1">{s}</span>
+          }
+          blank={""} />
 
-      {/* Risks */}
-      <ListSection
-        label="Risks"
-        items={draft.risks || []}
-        editing={editing==="risks"}
-        onEdit={()=>setEditing("risks")}
-        onChange={(arr)=>setField("risks", arr)}
-        prefix={<span className="font-mono text-xs text-[#FFCC00] mt-0.5">!</span>}
-        renderItem={(s,i,onChange)=>(
-          editing==="risks" ? (
-            <input value={s} onChange={e=>onChange(e.target.value)} data-testid={`edit-risk-${i}`}
-              className="w-full px-3 py-2 border border-[#0055FF] text-sm" />
-          ) : (<span>{s}</span>)
-        )}
-        blank=""
-      />
+        <RowsSection label="Detailed Tasks (WBS)"
+          rows={draft.detailed_tasks || []} editing={editing==="detailed_tasks"}
+          onEdit={()=>setEditing("detailed_tasks")}
+          columns={[
+            { key: "id", label: "WBS ID", w: "w-24", mono: true },
+            { key: "task", label: "Task" },
+            { key: "subtasks", label: "Subtasks", multiline: true },
+          ]}
+          onUpdate={(arr)=>setField("detailed_tasks", arr)}
+          blank={{ id: "", task: "", subtasks: [] }} />
 
-      {/* Program */}
-      <RowsSection
-        label="Program / Phases"
-        rows={draft.program || []}
-        editing={editing==="program"}
-        onEdit={()=>setEditing("program")}
-        columns={[
-          { key: "phase", label: "Phase", w: "w-44" },
-          { key: "description", label: "Description" },
-          { key: "duration", label: "Duration", w: "w-32", mono: true },
-        ]}
-        onUpdate={(arr)=>setField("program", arr)}
-        blank={{ phase: "", description: "", duration: "" }}
-      />
+        <RowsSection label="Deliverables"
+          rows={draft.deliverables || []} editing={editing==="deliverables"}
+          onEdit={()=>setEditing("deliverables")}
+          columns={[
+            { key: "name", label: "Name", w: "w-44" },
+            { key: "description", label: "Description" },
+            { key: "acceptance_criteria", label: "Acceptance" },
+            { key: "due", label: "Due", w: "w-32", mono: true },
+          ]}
+          onUpdate={(arr)=>setField("deliverables", arr)}
+          blank={{ name: "", description: "", acceptance_criteria: "", due: "" }} />
+
+        <DutiesSection
+          duties={draft.agency_contractor_duties || { agency: [], contractor: [] }}
+          editing={editing==="agency_contractor_duties"}
+          onEdit={()=>setEditing("agency_contractor_duties")}
+          onChange={(v)=>setField("agency_contractor_duties", v)} />
+      </Group>
+
+      {/* ===== GROUP C: SCHEDULE ===== */}
+      <Group label="C · Schedule">
+        <RowsSection label="Program / Phases"
+          rows={draft.program || []} editing={editing==="program"} onEdit={()=>setEditing("program")}
+          columns={[
+            { key: "phase", label: "Phase", w: "w-44" },
+            { key: "description", label: "Description" },
+            { key: "duration", label: "Duration", w: "w-32", mono: true },
+          ]}
+          onUpdate={(arr)=>setField("program", arr)}
+          blank={{ phase: "", description: "", duration: "" }} />
+
+        <RowsSection label="Key Dates" icon={<Calendar size={12} weight="bold"/>}
+          rows={draft.key_dates || []} editing={editing==="key_dates"} onEdit={()=>setEditing("key_dates")}
+          columns={[
+            { key: "date", label: "Date", w: "w-40", mono: true },
+            { key: "label", label: "Label" },
+            { key: "type", label: "Type", w: "w-40", select: ["submission","kickoff","milestone","interview","site_visit","other"] },
+          ]}
+          onUpdate={(arr)=>setField("key_dates", arr)}
+          blank={{ date: "", label: "", type: "milestone" }} />
+      </Group>
+
+      {/* ===== GROUP D: REQUIREMENTS ===== */}
+      <Group label="D · Requirements">
+        <RowsSection label={`Requirements (${(draft.requirements||[]).length})`} icon={<ListChecks size={12} weight="bold"/>}
+          rows={draft.requirements || []} editing={editing==="requirements"} onEdit={()=>setEditing("requirements")}
+          columns={[
+            { key: "id", label: "ID", w: "w-24", mono: true },
+            { key: "category", label: "Category", w: "w-44", mono: true },
+            { key: "requirement", label: "Requirement" },
+            { key: "mandatory", label: "Mandatory", w: "w-28", bool: true },
+          ]}
+          onUpdate={(arr)=>setField("requirements", arr)}
+          blank={{ id: "", category: "", requirement: "", mandatory: false, source: "" }} />
+
+        <RowsSection label="Technical Specifications"
+          rows={draft.technical_specifications || []} editing={editing==="technical_specifications"}
+          onEdit={()=>setEditing("technical_specifications")}
+          columns={[
+            { key: "category", label: "Category", w: "w-40", mono: true },
+            { key: "specification", label: "Specification" },
+            { key: "standard", label: "Standard", w: "w-40", mono: true },
+            { key: "quantity", label: "Qty", w: "w-20", mono: true, align: "right" },
+            { key: "unit", label: "Unit", w: "w-20", mono: true },
+          ]}
+          onUpdate={(arr)=>setField("technical_specifications", arr)}
+          blank={{ category: "", specification: "", standard: "", quantity: "", unit: "" }} />
+
+        <RowsSection label="Vendor Qualifications"
+          rows={draft.vendor_qualifications || []} editing={editing==="vendor_qualifications"}
+          onEdit={()=>setEditing("vendor_qualifications")}
+          columns={[
+            { key: "requirement", label: "Requirement" },
+            { key: "evidence_required", label: "Evidence required" },
+          ]}
+          onUpdate={(arr)=>setField("vendor_qualifications", arr)}
+          blank={{ requirement: "", evidence_required: "" }} />
+
+        <RowsSection label="Compliance & Ethics"
+          rows={draft.compliance_and_ethics || []} editing={editing==="compliance_and_ethics"}
+          onEdit={()=>setEditing("compliance_and_ethics")}
+          columns={[
+            { key: "item", label: "Item" },
+            { key: "type", label: "Type", w: "w-36", select: ["insurance","certificate","bond","ethics","other"] },
+            { key: "details", label: "Details" },
+          ]}
+          onUpdate={(arr)=>setField("compliance_and_ethics", arr)}
+          blank={{ item: "", type: "other", details: "" }} />
+      </Group>
+
+      {/* ===== GROUP E: DISCIPLINES ===== */}
+      <Group label="E · Disciplines">
+        <Section label={`Disciplines (${(draft.disciplines||[]).length})`} icon={<Users size={12} weight="bold"/>}
+          editing={editing==="disciplines"} onEdit={()=>setEditing("disciplines")}>
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-0 border border-zinc-200">
+            {(draft.disciplines||[]).map((d,i) => (
+              <div key={i} className="p-5 border-r border-b border-zinc-200" data-testid={`discipline-${i}`}>
+                {editing==="disciplines" ? (
+                  <div className="space-y-2">
+                    <input value={d.name||""} onChange={e=>updateRow("disciplines", i, {...d, name:e.target.value})}
+                      placeholder="Name" className="w-full px-2 py-1 border border-[#0055FF] text-sm font-semibold" />
+                    <input value={d.description||""} onChange={e=>updateRow("disciplines", i, {...d, description:e.target.value})}
+                      placeholder="Description" className="w-full px-2 py-1 border border-[#0055FF] text-xs" />
+                    <textarea rows={3} value={d.scope_summary||""} onChange={e=>updateRow("disciplines", i, {...d, scope_summary:e.target.value})}
+                      placeholder="Scope summary" className="w-full px-2 py-1 border border-[#0055FF] text-xs resize-y" />
+                    <button onClick={()=>removeRow("disciplines", i)} className="text-[10px] uppercase tracking-[0.15em] font-mono text-[#FF3B30]">Remove</button>
+                  </div>
+                ) : (
+                  <>
+                    <div className="font-display text-base font-bold tracking-tight mb-1">{d.name}</div>
+                    <div className="text-xs text-zinc-500 mb-2">{d.description}</div>
+                    <div className="text-xs text-zinc-700">{d.scope_summary}</div>
+                  </>
+                )}
+              </div>
+            ))}
+            {editing==="disciplines" && (
+              <button onClick={()=>addRow("disciplines", { name: "", description: "", scope_summary: "" })}
+                data-testid="add-discipline-btn"
+                className="p-5 border-r border-b border-dashed border-zinc-300 text-sm text-zinc-500 hover:bg-zinc-50 hover:text-[#0055FF] transition-colors flex items-center justify-center gap-2">
+                <Plus size={14} weight="bold"/> Add discipline
+              </button>
+            )}
+          </div>
+        </Section>
+      </Group>
+
+      {/* ===== GROUP F: PROGRAMMATIC ===== */}
+      <Group label="F · Programmatic">
+        <RowsSection label="Evaluation Criteria"
+          rows={draft.evaluation_criteria || []} editing={editing==="evaluation_criteria"}
+          onEdit={()=>setEditing("evaluation_criteria")}
+          columns={[
+            { key: "criterion", label: "Criterion" },
+            { key: "weight", label: "Weight", w: "w-28", mono: true, align: "right" },
+            { key: "notes", label: "Notes", w: "w-64" },
+          ]}
+          onUpdate={(arr)=>setField("evaluation_criteria", arr)}
+          blank={{ criterion: "", weight: "", notes: "" }} />
+
+        <KeyValueSection label="Financial Terms" icon={<Money size={12} weight="bold"/>}
+          obj={draft.financial_terms || {}}
+          editing={editing==="financial_terms"} onEdit={()=>setEditing("financial_terms")}
+          fields={[
+            { key: "pricing_format", label: "Pricing format", select: ["lump sum","hourly","per-milestone","cost-plus","mixed","other"] },
+            { key: "budget_ceiling", label: "Budget ceiling", mono: true },
+            { key: "payment_structure", label: "Payment structure", textarea: true },
+            { key: "currency", label: "Currency", mono: true },
+          ]}
+          onChange={(v)=>setField("financial_terms", v)} />
+
+        <RowsSection label="Risk Management"
+          rows={draft.risk_management || []} editing={editing==="risk_management"}
+          onEdit={()=>setEditing("risk_management")}
+          columns={[
+            { key: "clause", label: "Clause", w: "w-56" },
+            { key: "details", label: "Details" },
+          ]}
+          onUpdate={(arr)=>setField("risk_management", arr)}
+          blank={{ clause: "", details: "" }} />
+
+        <KeyValueSection label="Submission Guidelines"
+          obj={draft.submission_guidelines || {}}
+          editing={editing==="submission_guidelines"} onEdit={()=>setEditing("submission_guidelines")}
+          fields={[
+            { key: "format", label: "Format", textarea: true },
+            { key: "page_limit", label: "Page limit", mono: true },
+            { key: "copies", label: "Copies", mono: true },
+            { key: "language", label: "Language" },
+            { key: "delivery_method", label: "Delivery method" },
+            { key: "mandatory_forms", label: "Mandatory forms", list: true },
+          ]}
+          onChange={(v)=>setField("submission_guidelines", v)} />
+      </Group>
+
+      {/* ===== GROUP G: RISKS ===== */}
+      <Group label="G · Risks">
+        <ListSection label="Risks" items={draft.risks || []} editing={editing==="risks"}
+          onEdit={()=>setEditing("risks")} onChange={(arr)=>setField("risks", arr)}
+          prefix={<span className="font-mono text-xs text-[#FFCC00] mt-0.5">!</span>}
+          renderItem={(s,i,onChange)=> editing==="risks"
+            ? <input value={s} onChange={e=>onChange(e.target.value)} data-testid={`edit-risk-${i}`} className="w-full px-3 py-2 border border-[#0055FF] text-sm" />
+            : <span>{s}</span>
+          }
+          blank="" />
+      </Group>
     </div>
   );
 };
+
+// ---- Group header (numbered section divider) ---- //
+const Group = ({ label, children }) => (
+  <div className="space-y-6">
+    <div className="pt-2 pb-1 border-b-2 border-[#0A0A0B]">
+      <div className="font-display text-2xl tracking-tighter font-black">{label}</div>
+    </div>
+    <div className="space-y-8">{children}</div>
+  </div>
+);
 
 // ---- Section primitive ---- //
 const Section = ({ label, icon, editing, onEdit, children }) => (
@@ -535,6 +631,14 @@ const RowsSection = ({ label, icon, rows, editing, onEdit, columns, onUpdate, bl
                         className="px-2 py-1 border border-[#0055FF] text-xs bg-white">
                         {c.select.map(o => <option key={o}>{o}</option>)}
                       </select>
+                    ) : c.multiline ? (
+                      <textarea
+                        rows={Math.max(2, Array.isArray(r[c.key]) ? r[c.key].length : 2)}
+                        value={Array.isArray(r[c.key]) ? r[c.key].join("\n") : (r[c.key] || "")}
+                        onChange={e=>update(i, c.key, e.target.value.split("\n").filter(x=>x))}
+                        data-testid={`edit-${c.key}-${i}`}
+                        placeholder="One item per line"
+                        className="w-full px-2 py-1 border border-[#0055FF] text-xs resize-y" />
                     ) : (
                       <input value={r[c.key] ?? ""} onChange={e=>update(i, c.key, e.target.value)}
                         data-testid={`edit-${c.key}-${i}`}
@@ -545,6 +649,12 @@ const RowsSection = ({ label, icon, rows, editing, onEdit, columns, onUpdate, bl
                       r[c.key]
                         ? <span className="text-[10px] uppercase tracking-[0.15em] font-mono px-2 py-0.5 bg-[#FF3B30] text-white">Yes</span>
                         : <span className="text-[10px] uppercase tracking-[0.15em] font-mono px-2 py-0.5 bg-zinc-100">Optional</span>
+                    ) : c.multiline && Array.isArray(r[c.key]) ? (
+                      r[c.key].length > 0 ? (
+                        <ul className="list-disc list-inside text-xs space-y-0.5">
+                          {r[c.key].map((s, j) => <li key={j}>{s}</li>)}
+                        </ul>
+                      ) : <span className="text-zinc-400">—</span>
                     ) : (
                       <span>{r[c.key] || (c.key==="id" ? `R-${String(i+1).padStart(3,'0')}` : "—")}</span>
                     )
@@ -571,6 +681,121 @@ const RowsSection = ({ label, icon, rows, editing, onEdit, columns, onUpdate, bl
           )}
         </tbody>
       </table>
+    </div>
+  );
+};
+
+// ---- Object (Key/Value) section: financial_terms, submission_guidelines ---- //
+const KeyValueSection = ({ label, icon, obj, fields, editing, onEdit, onChange }) => {
+  const set = (key, val) => onChange({ ...obj, [key]: val });
+  return (
+    <div data-testid={`kv-${label.toLowerCase().replace(/\W+/g,'-')}`}>
+      <div className="flex items-center justify-between mb-3">
+        <div className="overline flex items-center gap-2">{icon} {label}</div>
+        <button onClick={onEdit} className="flex items-center gap-1 text-[10px] uppercase tracking-[0.15em] font-semibold text-zinc-500 hover:text-[#0055FF] transition-colors">
+          <PencilSimple size={11} weight="bold"/> {editing ? "Editing" : "Edit"}
+        </button>
+      </div>
+      <div className={`border ${editing ? 'border-[#0055FF]' : 'border-zinc-200'}`}>
+        {fields.map((f, idx) => {
+          const val = obj?.[f.key];
+          const isLast = idx === fields.length - 1;
+          return (
+            <div key={f.key} className={`grid grid-cols-1 md:grid-cols-4 ${!isLast ? 'border-b' : ''} ${editing ? 'border-[#0055FF]/30' : 'border-zinc-200'}`}>
+              <div className="overline px-4 py-3 md:border-r border-zinc-200 bg-zinc-50/50 md:col-span-1">{f.label}</div>
+              <div className="px-4 py-3 md:col-span-3">
+                {editing ? (
+                  f.list ? (
+                    <textarea
+                      rows={Math.max(2, Array.isArray(val) ? val.length : 2)}
+                      value={Array.isArray(val) ? val.join("\n") : (val || "")}
+                      onChange={e=>set(f.key, e.target.value.split("\n").filter(x=>x))}
+                      data-testid={`edit-kv-${f.key}`}
+                      placeholder="One item per line"
+                      className="w-full px-2 py-1 border border-[#0055FF] text-sm resize-y" />
+                  ) : f.select ? (
+                    <select value={val||""} onChange={e=>set(f.key, e.target.value)}
+                      data-testid={`edit-kv-${f.key}`}
+                      className="px-2 py-1 border border-[#0055FF] text-sm bg-white">
+                      <option value="">—</option>
+                      {f.select.map(o => <option key={o}>{o}</option>)}
+                    </select>
+                  ) : f.textarea ? (
+                    <textarea rows={3} value={val||""} onChange={e=>set(f.key, e.target.value)}
+                      data-testid={`edit-kv-${f.key}`}
+                      className={`w-full px-2 py-1 border border-[#0055FF] ${f.mono?'font-mono text-xs':'text-sm'} resize-y`} />
+                  ) : (
+                    <input value={val||""} onChange={e=>set(f.key, e.target.value)}
+                      data-testid={`edit-kv-${f.key}`}
+                      className={`w-full px-2 py-1 border border-[#0055FF] ${f.mono?'font-mono text-xs':'text-sm'}`} />
+                  )
+                ) : (
+                  f.list && Array.isArray(val) ? (
+                    val.length > 0 ? (
+                      <ul className="list-disc list-inside text-sm space-y-0.5">
+                        {val.map((s, j) => <li key={j}>{s}</li>)}
+                      </ul>
+                    ) : <span className="text-zinc-400 text-sm">—</span>
+                  ) : (
+                    <span className={`${f.mono?'font-mono text-xs':'text-sm'}`}>{val || <span className="text-zinc-400">—</span>}</span>
+                  )
+                )}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+};
+
+// ---- Agency / Contractor duties (two parallel string lists) ---- //
+const DutiesSection = ({ duties, editing, onEdit, onChange }) => {
+  const setSide = (side, arr) => onChange({ ...duties, [side]: arr });
+  const renderSide = (label, side, items) => (
+    <div className="border border-zinc-200">
+      <div className="overline px-4 py-3 border-b border-zinc-200 bg-zinc-50/50">{label}</div>
+      <ul>
+        {(items || []).map((s, i) => (
+          <li key={i} className="flex gap-3 px-4 py-2 border-b border-zinc-100 text-sm items-center">
+            <span className="font-mono text-xs text-zinc-500 w-6">{String(i+1).padStart(2,'0')}</span>
+            {editing ? (
+              <input value={s} onChange={e=>{ const a=[...items]; a[i]=e.target.value; setSide(side, a); }}
+                data-testid={`edit-duty-${side}-${i}`}
+                className="flex-1 px-2 py-1 border border-[#0055FF] text-sm" />
+            ) : <span className="flex-1">{s}</span>}
+            {editing && (
+              <button onClick={()=>{ const a=[...items]; a.splice(i,1); setSide(side, a); }}
+                className="p-1 text-zinc-400 hover:text-[#FF3B30]">
+                <Trash size={12} weight="bold"/>
+              </button>
+            )}
+          </li>
+        ))}
+        {editing && (
+          <li className="px-4 py-2">
+            <button onClick={()=>setSide(side, [...(items||[]), ""])}
+              data-testid={`add-duty-${side}`}
+              className="text-[11px] uppercase tracking-[0.15em] font-semibold text-[#0055FF] hover:text-[#0A0A0B] flex items-center gap-1">
+              <Plus size={12} weight="bold"/> Add
+            </button>
+          </li>
+        )}
+      </ul>
+    </div>
+  );
+  return (
+    <div data-testid="section-duties">
+      <div className="flex items-center justify-between mb-3">
+        <div className="overline">Agency & Contractor Duties</div>
+        <button onClick={onEdit} className="flex items-center gap-1 text-[10px] uppercase tracking-[0.15em] font-semibold text-zinc-500 hover:text-[#0055FF] transition-colors">
+          <PencilSimple size={11} weight="bold"/> {editing ? "Editing" : "Edit"}
+        </button>
+      </div>
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        {renderSide("Agency", "agency", duties?.agency || [])}
+        {renderSide("Contractor", "contractor", duties?.contractor || [])}
+      </div>
     </div>
   );
 };

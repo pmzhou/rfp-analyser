@@ -34,33 +34,79 @@ You analyse Request-For-Proposal documents and produce a structured, exhaustive 
 
 Always reply with STRICT VALID JSON (no markdown, no commentary) matching this schema:
 {
-  "title": str,                                    // short title for the project
-  "client": str,                                   // client / issuer name (best-guess if unclear)
-  "summary": str,                                  // 2-4 sentence executive summary
-  "scope": [str, ...],                             // bullet points of project scope
-  "program": [                                     // project program / phases
+  "title": str,
+  "client": str,
+  "summary": str,
+  "project_objectives": str,                       // narrative on project relationship to agency mission and desired outcome
+
+  // ----- Scope of Work (SOW) -----
+  "scope": [str, ...],                             // top-level scope bullets
+  "detailed_tasks": [                              // sequential WBS-style tasks
+    {"id": str, "task": str, "subtasks": [str, ...]}
+  ],
+  "deliverables": [
+    {"name": str, "description": str, "acceptance_criteria": str, "due": str}
+  ],
+  "agency_contractor_duties": {
+    "agency": [str, ...],
+    "contractor": [str, ...]
+  },
+
+  // ----- Schedule -----
+  "program": [
     {"phase": str, "description": str, "duration": str}
   ],
   "key_dates": [
-    {"label": str, "date": str, "type": str}       // type: submission|kickoff|milestone|interview|other
+    {"label": str, "date": str, "type": str}       // submission|kickoff|milestone|interview|site_visit|other
   ],
+
+  // ----- Common RFP Requirements -----
   "requirements": [
     {"id": str, "category": str, "requirement": str, "mandatory": bool, "source": str}
   ],
+  "technical_specifications": [                    // materials, equipment, software platforms, performance standards
+    {"category": str, "specification": str, "standard": str, "quantity": str, "unit": str}
+  ],
+  "vendor_qualifications": [                       // experience, case studies, references, certifications
+    {"requirement": str, "evidence_required": str}
+  ],
+  "compliance_and_ethics": [                       // certificates, insurance, bonding, ethics
+    {"item": str, "type": str, "details": str}     // type: insurance|certificate|bond|ethics|other
+  ],
+
+  // ----- Disciplines (AEC) -----
   "disciplines": [
     {"name": str, "description": str, "scope_summary": str}
-                                                   // typical AEC disciplines: Architecture, Structural, MEP,
-                                                   // Civil, Geotechnical, Landscape, Interiors, Fire, Acoustics,
-                                                   // Sustainability, Cost, Project Management, Surveying, etc.
   ],
-  "risks": [str, ...],
+
+  // ----- Programmatic Elements -----
   "evaluation_criteria": [
-    {"criterion": str, "weight": str}
-  ]
+    {"criterion": str, "weight": str, "notes": str}
+  ],
+  "financial_terms": {
+    "pricing_format": str,                         // lump sum|hourly|per-milestone|cost-plus|mixed|other
+    "budget_ceiling": str,
+    "payment_structure": str,
+    "currency": str
+  },
+  "risk_management": [                             // liquidated damages, performance bonds, dispute resolution
+    {"clause": str, "details": str}
+  ],
+  "submission_guidelines": {
+    "format": str,
+    "page_limit": str,
+    "copies": str,
+    "language": str,
+    "delivery_method": str,
+    "mandatory_forms": [str, ...]
+  },
+
+  "risks": [str, ...]
 }
 
 Be comprehensive: extract every requirement you find, even small ones. Include all dates with deadlines.
-Identify ALL applicable engineering/architecture disciplines based on the scope.
+Identify ALL applicable engineering/architecture disciplines. Use empty arrays/strings rather than omitting fields.
+For technical_specifications, extract quantity/unit when stated (e.g. "500 m²", "12 ea"); leave empty if not specified.
 """
 
 

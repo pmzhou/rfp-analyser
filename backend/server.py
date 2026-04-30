@@ -348,7 +348,7 @@ async def public_get_invite(token: str):
     if inv["status"] == "sent":
         await db.invites.update_one({"share_token": token}, {"$set": {"status": "viewed"}})
         inv["status"] = "viewed"
-    # Slim analysis for sub-consultant: only their discipline + key dates + scope
+    # Slim analysis for sub-consultant: only their discipline + relevant project context
     discipline_section = None
     if proj and proj.get("analysis"):
         analysis = proj["analysis"]
@@ -359,13 +359,25 @@ async def public_get_invite(token: str):
         proj_view = {
             "title": proj.get("title"),
             "client_name": proj.get("client_name"),
-            "summary": analysis.get("summary"),
+            "summary": analysis.get("summary", ""),
+            "project_objectives": analysis.get("project_objectives", ""),
             "scope": analysis.get("scope", []),
             "key_dates": analysis.get("key_dates", []),
+            "deliverables": analysis.get("deliverables", []),
+            "technical_specifications": analysis.get("technical_specifications", []),
+            "financial_terms": analysis.get("financial_terms", {}),
+            "submission_guidelines": analysis.get("submission_guidelines", {}),
             "discipline": discipline_section,
         }
     else:
-        proj_view = {"title": proj.get("title") if proj else "", "client_name": proj.get("client_name") if proj else "", "summary": "", "scope": [], "key_dates": [], "discipline": None}
+        proj_view = {
+            "title": proj.get("title") if proj else "",
+            "client_name": proj.get("client_name") if proj else "",
+            "summary": "", "project_objectives": "", "scope": [], "key_dates": [],
+            "deliverables": [], "technical_specifications": [],
+            "financial_terms": {}, "submission_guidelines": {},
+            "discipline": None,
+        }
     return {"invite": inv, "project": proj_view}
 
 
