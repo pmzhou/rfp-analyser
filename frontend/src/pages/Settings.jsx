@@ -137,8 +137,16 @@ const LLMTab = () => {
     anthropic: ["claude-sonnet-4-5-20250929","claude-haiku-4-5-20251001","claude-opus-4-5-20251101","claude-sonnet-4-6","claude-opus-4-6"],
     openai:    ["gpt-5.2","gpt-5.1","gpt-5","gpt-5-mini","gpt-4.1","gpt-4o","o3"],
     gemini:    ["gemini-3.1-pro-preview","gemini-3-flash-preview","gemini-2.5-pro","gemini-2.5-flash"],
-    custom:    ["custom-model"],
+    ollama:    ["llama3.1","llama3.2","mistral","mixtral","qwen2.5","qwen2.5-coder","gemma3","phi4","deepseek-r1"],
+    custom:    [],
   };
+
+  const PROVIDER_HINTS = {
+    ollama: "Default: http://localhost:11434/v1 — make sure Ollama is running and the model is pulled (`ollama pull llama3.1`).",
+    custom: "Any OpenAI-compatible endpoint: vLLM, LM Studio, Together, Groq, OpenRouter, etc. Provide Base URL + (if required) API key.",
+  };
+
+  const isLocal = !!s && (s.llm_provider === "ollama" || s.llm_provider === "custom");
 
   const save = async () => {
     setBusy(true);
@@ -167,31 +175,50 @@ const LLMTab = () => {
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         <div>
           <label className="overline block mb-2">Provider</label>
-          <select value={provider} onChange={e=>setS({...s, llm_provider: e.target.value, llm_model: PROVIDERS[e.target.value][0]})} data-testid="llm-provider"
+          <select value={provider} onChange={e=>{
+              const p = e.target.value;
+              const baseUrl = p === "ollama" ? "http://localhost:11434/v1" : (p === "custom" ? "" : "");
+              setS({...s, llm_provider: p, llm_model: (PROVIDERS[p] && PROVIDERS[p][0]) || "", llm_base_url: baseUrl});
+            }} data-testid="llm-provider"
             className="w-full px-3 py-3 border border-[#0A0A0B] text-sm bg-white">
             <option value="anthropic">Anthropic (Claude)</option>
             <option value="openai">OpenAI (GPT)</option>
             <option value="gemini">Google (Gemini)</option>
+            <option value="ollama">Ollama (local)</option>
             <option value="custom">Custom (OpenAI-compatible)</option>
           </select>
         </div>
         <div>
           <label className="overline block mb-2">Model</label>
-          <select value={s.llm_model || PROVIDERS[provider][0]} onChange={e=>setS({...s, llm_model: e.target.value})} data-testid="llm-model"
-            className="w-full px-3 py-3 border border-[#0A0A0B] text-sm bg-white font-mono">
-            {PROVIDERS[provider].map(m => <option key={m}>{m}</option>)}
-          </select>
+          {isLocal && provider === "custom" ? (
+            <input value={s.llm_model || ""} onChange={e=>setS({...s, llm_model: e.target.value})} data-testid="llm-model"
+              placeholder="e.g. mistral-small or your-model-id"
+              className="w-full px-3 py-3 border border-[#0A0A0B] text-sm font-mono" />
+          ) : (
+            <input list={`models-${provider}`} value={s.llm_model || ""} onChange={e=>setS({...s, llm_model: e.target.value})} data-testid="llm-model"
+              className="w-full px-3 py-3 border border-[#0A0A0B] text-sm font-mono" />
+          )}
+          <datalist id={`models-${provider}`}>
+            {(PROVIDERS[provider] || []).map(m => <option key={m} value={m} />)}
+          </datalist>
+          {isLocal && <p className="text-[10px] uppercase tracking-[0.18em] text-zinc-500 mt-1">Free-text — type any model you have locally.</p>}
         </div>
-        <div>
+        <div className={isLocal ? "" : "md:col-span-1"}>
           <label className="overline block mb-2">API Key</label>
-          <input type="password" placeholder={s.llm_api_key_mask || "(using Emergent Universal key)"} value={key ?? ""} onChange={e=>setKey(e.target.value)} data-testid="llm-api-key"
+          <input type="password" placeholder={s.llm_api_key_mask || (isLocal ? "Optional for local LLMs" : "(using Emergent Universal key)")}
+            value={key ?? ""} onChange={e=>setKey(e.target.value)} data-testid="llm-api-key"
             className="w-full px-3 py-3 border border-[#0A0A0B] text-sm font-mono" />
           <p className="text-[10px] uppercase tracking-[0.18em] text-zinc-500 mt-1">
-            {key === null ? (s.llm_api_key_mask ? `Saved: ${s.llm_api_key_mask}` : "Leave blank to use Emergent Universal key") : <span className="text-[#0055FF]">New key will be saved on Save</span>}
+            {key === null ? (s.llm_api_key_mask ? `Saved: ${s.llm_api_key_mask}` : (isLocal ? "Most local LLMs don't require a key" : "Leave blank to use Emergent Universal key")) : <span className="text-[#0055FF]">New key will be saved</span>}
           </p>
         </div>
-        {provider === "custom" && (
-          <Field label="Base URL (OpenAI-compatible)" testid="llm-base-url" value={s.llm_base_url||""} onChange={v=>setS({...s, llm_base_url:v})} placeholder="http://localhost:11434/v1" />
+        {isLocal && (
+          <Field label="Base URL (OpenAI-compatible)" testid="llm-base-url" value={s.llm_base_url||""} onChange={v=>setS({...s, llm_base_url:v})} placeholder={provider==="ollama"?"http://localhost:11434/v1":"https://api.your-host.com/v1"} />
+        )}
+        {isLocal && PROVIDER_HINTS[provider] && (
+          <div className="md:col-span-2 p-3 border-l-2 border-[#0055FF] bg-[#0055FF]/5 text-xs leading-relaxed">
+            <span className="overline mr-2">Tip</span>{PROVIDER_HINTS[provider]}
+          </div>
         )}
       </div>
       <div className="flex gap-2 pt-3 border-t border-zinc-200">

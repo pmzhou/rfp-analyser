@@ -1,4 +1,4 @@
-"""LLM service: now reads per-user settings (provider/model/key/base_url) and supports custom OpenAI-compatible endpoints."""
+"""LLM service: per-user settings (provider/model/key/base_url), supports Ollama / OpenAI-compatible local endpoints."""
 import os
 import json
 import re
@@ -6,34 +6,52 @@ import uuid
 from typing import List, Dict, Any, Optional
 
 from emergentintegrations.llm.chat import LlmChat, UserMessage
+from openai import AsyncOpenAI
 
 DEFAULT_PROVIDER = "anthropic"
 DEFAULT_MODEL = "claude-sonnet-4-5-20250929"
+LOCAL_PROVIDERS = {"ollama", "custom"}
 
 
-def _key_for(provider: str, user_settings: Optional[Dict[str, Any]] = None) -> str:
-    """Pick the API key: per-user override, then EMERGENT_LLM_KEY."""
-    if user_settings and user_settings.get("llm_api_key"):
-        return user_settings["llm_api_key"]
-    return os.environ.get("EMERGENT_LLM_KEY", "")
-
-
-def _provider_model(user_settings: Optional[Dict[str, Any]] = None) -> tuple:
-    if user_settings:
-        p = user_settings.get("llm_provider") or DEFAULT_PROVIDER
-        m = user_settings.get("llm_model") or DEFAULT_MODEL
-        return p, m
+def _provider_model(s: Optional[Dict[str, Any]]) -> tuple:
+    if s:
+        return (s.get("llm_provider") or DEFAULT_PROVIDER, s.get("llm_model") or DEFAULT_MODEL)
     return DEFAULT_PROVIDER, DEFAULT_MODEL
 
 
-def _new_chat(session_id: str, system: str, user_settings: Optional[Dict[str, Any]] = None) -> LlmChat:
-    provider, model = _provider_model(user_settings)
-    chat = LlmChat(
-        api_key=_key_for(provider, user_settings),
-        session_id=session_id,
-        system_message=system,
-    ).with_model(provider, model)
-    return chat
+def _api_key(s: Optional[Dict[str, Any]]) -> str:
+    if s and s.get("llm_api_key"):
+        return s["llm_api_key"]
+    return os.environ.get("EMERGENT_LLM_KEY", "")
+
+
+def _base_url(s: Optional[Dict[str, Any]], provider: str) -> str:
+    if s and s.get("llm_base_url"):
+        return s["llm_base_url"]
+    if provider == "ollama":
+        return "http://localhost:11434/v1"
+    return ""
+
+
+async def _send(system: str, prompt: str, session_id: str, s: Optional[Dict[str, Any]]) -> str:
+    """Dispatch to emergentintegrations (cloud) or OpenAI SDK (local)."""
+    provider, model = _provider_model(s)
+    if provider in LOCAL_PROVIDERS:
+        base_url = _base_url(s, provider)
+        if not base_url:
+            raise RuntimeError(f"{provider} provider requires Base URL in Settings")
+        # Local LLMs (Ollama, vLLM, LM Studio, OpenAI-compatible) typically don't need an API key
+        api_key = _api_key(s) or "local"
+        client = AsyncOpenAI(base_url=base_url, api_key=api_key, timeout=180.0)
+        resp = await client.chat.completions.create(
+            model=model,
+            messages=[{"role": "system", "content": system}, {"role": "user", "content": prompt}],
+            temperature=0.2,
+        )
+        return resp.choices[0].message.content or ""
+    # Cloud providers via emergentintegrations
+    chat = LlmChat(api_key=_api_key(s), session_id=session_id, system_message=system).with_model(provider, model)
+    return str(await chat.send_message(UserMessage(text=prompt)))
 
 
 def _strip_json(text: str) -> str:
@@ -100,9 +118,9 @@ CHUNK_SIZE = 90000
 async def _analyze_single(project_id: str, text: str, user_settings: Optional[Dict[str, Any]] = None,
                           extra_instructions: str = "") -> Dict[str, Any]:
     sysmsg = ANALYSIS_SYSTEM + ("\n\n" + extra_instructions if extra_instructions else "")
-    chat = _new_chat(f"analyse-{project_id}-{uuid.uuid4().hex[:8]}", sysmsg, user_settings)
-    msg = UserMessage(text=f"Analyse the following RFP documents and respond with the JSON schema only.\n\nDOCUMENTS:\n{text}")
-    raw = await chat.send_message(msg)
+    raw = await _send(sysmsg,
+        f"Analyse the following RFP documents and respond with the JSON schema only.\n\nDOCUMENTS:\n{text}",
+        f"analyse-{project_id}-{uuid.uuid4().hex[:8]}", user_settings)
     return _parse_json(raw)
 
 
@@ -113,9 +131,9 @@ Reply with STRICT VALID JSON only, no commentary."""
 
 async def _merge_partials(project_id: str, partials: List[Dict[str, Any]],
                           user_settings: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-    chat = _new_chat(f"merge-{project_id}-{uuid.uuid4().hex[:8]}", MERGE_SYSTEM, user_settings)
-    msg = UserMessage(text="Merge these partial analyses into one. JSON only.\n\n" + json.dumps(partials, ensure_ascii=False))
-    raw = await chat.send_message(msg)
+    raw = await _send(MERGE_SYSTEM,
+        "Merge these partial analyses into one. JSON only.\n\n" + json.dumps(partials, ensure_ascii=False),
+        f"merge-{project_id}-{uuid.uuid4().hex[:8]}", user_settings)
     return _parse_json(raw)
 
 
@@ -163,6 +181,6 @@ async def answer_question(project_id: str, question: str, context_chunks: List[D
     context_block = "\n\n---\n\n".join(
         f"[{c.get('filename', c.get('project_title', 'doc'))}] {c['text']}" for c in context_chunks
     )
-    chat = _new_chat(f"qa-{project_id}-{uuid.uuid4().hex[:8]}", CHAT_SYSTEM, user_settings)
-    msg = UserMessage(text=f"CONTEXT:\n{context_block}\n\nQUESTION: {question}")
-    return str(await chat.send_message(msg))
+    return await _send(CHAT_SYSTEM,
+        f"CONTEXT:\n{context_block}\n\nQUESTION: {question}",
+        f"qa-{project_id}-{uuid.uuid4().hex[:8]}", user_settings)
