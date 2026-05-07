@@ -42,7 +42,7 @@ async def _send(system: str, prompt: str, session_id: str, s: Optional[Dict[str,
             raise RuntimeError(f"{provider} provider requires Base URL in Settings")
         # Local LLMs (Ollama, vLLM, LM Studio, OpenAI-compatible) typically don't need an API key
         api_key = _api_key(s) or "local"
-        client = AsyncOpenAI(base_url=base_url, api_key=api_key, timeout=180.0)
+        client = AsyncOpenAI(base_url=base_url, api_key=api_key, timeout=600.0)
         resp = await client.chat.completions.create(
             model=model,
             messages=[{"role": "system", "content": system}, {"role": "user", "content": prompt}],

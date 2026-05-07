@@ -287,26 +287,35 @@ async def analyze(project_id: str, user=Depends(get_current_user)):
     settings = await _get_settings(user["id"])
     extra = await _custom_requirements_block(user["id"])
 
-    await db.projects.update_one({"id": project_id}, {"$set": {"status": "analysing", "updated_at": now()}})
-    try:
-        analysis = await analyze_rfp(project_id, combined, settings, extra)
-    except Exception as e:
-        logger.exception("analysis failed")
-        await db.projects.update_one({"id": project_id}, {"$set": {"status": "draft", "updated_at": now()}})
-        # Extract the most useful error string for the user
-        msg = str(e)
-        # Try to surface upstream API errors clearly
-        for marker in ("error':", "message':", "Error code:"):
-            if marker in msg:
-                # leave full message — the frontend shows the whole thing
-                break
-        raise HTTPException(500, f"Analysis failed: {msg[:600]}")
+    # Mark as analysing and clear any previous error
     await db.projects.update_one(
         {"id": project_id},
-        {"$set": {"analysis": analysis, "status": "analysed", "updated_at": now()}}
+        {"$set": {"status": "analysing", "analysis_error": None, "analysis_started_at": now(), "updated_at": now()}}
     )
+
+    # Run the long LLM call in the background so the kubernetes ingress doesn't time us out.
+    import asyncio
+    asyncio.create_task(_run_analysis_bg(project_id, combined, settings, extra))
+
     p = await db.projects.find_one({"id": project_id}, {"_id": 0})
     return p
+
+
+async def _run_analysis_bg(project_id: str, combined: str, settings: Dict[str, Any], extra: str):
+    try:
+        analysis = await analyze_rfp(project_id, combined, settings, extra)
+        await db.projects.update_one(
+            {"id": project_id},
+            {"$set": {"analysis": analysis, "status": "analysed", "analysis_error": None, "updated_at": now()}}
+        )
+        logger.info("analysis complete for %s", project_id)
+    except Exception as e:
+        logger.exception("background analysis failed for %s", project_id)
+        msg = str(e)[:600]
+        await db.projects.update_one(
+            {"id": project_id},
+            {"$set": {"status": "draft", "analysis_error": msg, "updated_at": now()}}
+        )
 
 
 @api.patch("/projects/{project_id}/fee-builder")
