@@ -638,6 +638,20 @@ const Group = ({ label, children }) => (
   </div>
 );
 
+const ConfidenceBadge = ({ level }) => {
+  const cfg = {
+    high:   { label: "HIGH",   cls: "bg-[#00C35A]/15 text-[#007A38]" },
+    medium: { label: "MED",    cls: "bg-[#FFCC00]/30 text-[#7A5E00]" },
+    low:    { label: "LOW",    cls: "bg-[#FF3B30]/15 text-[#B22318]" },
+  }[level] || { label: "—", cls: "bg-zinc-100 text-zinc-600" };
+  return (
+    <span className={`inline-flex items-center gap-1 text-[10px] uppercase tracking-[0.15em] font-mono px-2 py-0.5 ${cfg.cls}`}>
+      {level === "low" && <Warning size={10} weight="bold"/>}
+      {cfg.label}
+    </span>
+  );
+};
+
 // ---- Section primitive ---- //
 const Section = ({ label, icon, editing, onEdit, children }) => (
   <div data-testid={`section-${label.toLowerCase().replace(/\W+/g,'-')}`}>
