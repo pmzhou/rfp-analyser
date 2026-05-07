@@ -293,7 +293,14 @@ async def analyze(project_id: str, user=Depends(get_current_user)):
     except Exception as e:
         logger.exception("analysis failed")
         await db.projects.update_one({"id": project_id}, {"$set": {"status": "draft", "updated_at": now()}})
-        raise HTTPException(500, f"Analysis failed: {e}")
+        # Extract the most useful error string for the user
+        msg = str(e)
+        # Try to surface upstream API errors clearly
+        for marker in ("error':", "message':", "Error code:"):
+            if marker in msg:
+                # leave full message — the frontend shows the whole thing
+                break
+        raise HTTPException(500, f"Analysis failed: {msg[:600]}")
     await db.projects.update_one(
         {"id": project_id},
         {"$set": {"analysis": analysis, "status": "analysed", "updated_at": now()}}

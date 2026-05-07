@@ -53,17 +53,25 @@ const ProjectDetail = () => {
     if (docs.length === 0) return toast.error("Upload at least one document first");
     setAnalyzing(true);
     try {
-      const { data } = await api.post(`/projects/${id}/analyze`);
+      const { data } = await api.post(`/projects/${id}/analyze`, null, { timeout: 300000 });
       setProject(data);
       toast.success("Analysis complete");
       setTab("analysis");
     } catch (e) {
+      const status = e?.response?.status;
       const detail = e?.response?.data?.detail || e?.message || "Analysis failed";
-      const isBudget = String(detail).toLowerCase().includes("budget");
-      toast.error(detail, {
-        description: isBudget ? "Top up your Emergent Universal LLM key under Profile → Universal Key → Add Balance, then retry." : undefined,
-        duration: 10000,
-      });
+      const msg = String(detail);
+      let description;
+      if (msg.toLowerCase().includes("budget")) {
+        description = "Top up your Emergent Universal LLM key (Profile → Universal Key → Add Balance), or set your own API key in Settings → LLM Models.";
+      } else if (msg.toLowerCase().includes("model") && (msg.includes("supported") || msg.includes("not found") || msg.includes("invalid"))) {
+        description = "Check Settings → LLM Models — the model name may be wrong (case-sensitive) or your API key may not have access to that model.";
+      } else if (status === 502 || status === 504 || msg.toLowerCase().includes("timeout")) {
+        description = "The LLM took too long to respond. For very large RFPs, try a faster model, split the documents, or check your endpoint.";
+      } else if (msg.toLowerCase().includes("api key") || msg.toLowerCase().includes("authentication") || msg.toLowerCase().includes("unauthorized")) {
+        description = "API key rejected. Double-check the key in Settings → LLM Models.";
+      }
+      toast.error(detail.length > 180 ? detail.slice(0,180) + "…" : detail, { description, duration: 12000 });
     } finally { setAnalyzing(false); }
   };
 
