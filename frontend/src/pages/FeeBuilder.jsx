@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState, useRef } from "react";
 import { api } from "@/lib/api";
 import { toast } from "sonner";
+import { usePrefs } from "@/contexts/PrefsContext";
 import {
   Buildings, ListChecks, IdentificationCard, Users, Toolbox, ChartBar,
   FileText as FileTextIcon, Plus, Trash, Calendar, FloppyDisk, Power
@@ -35,7 +36,7 @@ const DEFAULT_MATRIX = [
 ];
 
 const DEFAULT_FB = {
-  details: { typology: "", gfa: 0, cost_per_m2: 0, currency: "USD", start_date: "", post_contract_date: "", assessed_by: "", reviewed_by: "" },
+  details: { typology: "", gfa: 0, cost_per_m2: 0, currency: "AED", start_date: "", post_contract_date: "", assessed_by: "", reviewed_by: "" },
   matrix: DEFAULT_MATRIX,
   stages_pre: DEFAULT_PRE.map(s => ({ ...s, on: true })),
   stages_post: DEFAULT_POST.map(s => ({ ...s, on: true })),
@@ -56,8 +57,15 @@ const PAGES = [
 
 /* ------------ component ------------ */
 const FeeBuilder = ({ project, onUpdate }) => {
+  const prefs = usePrefs();
   const [page, setPage] = useState("details");
-  const [fb, setFb] = useState(() => ({ ...DEFAULT_FB, ...(project.fee_builder || {}) }));
+  const [fb, setFb] = useState(() => {
+    const base = { ...DEFAULT_FB, ...(project.fee_builder || {}) };
+    if (!project.fee_builder) {
+      base.details.currency = prefs.default_currency || "AED";
+    }
+    return base;
+  });
   const [saving, setSaving] = useState(false);
   const [globalStaff, setGlobalStaff] = useState([]);
   const [globalSubs, setGlobalSubs] = useState([]);
@@ -179,7 +187,7 @@ const FeeBuilder = ({ project, onUpdate }) => {
         })}
       </div>
 
-      {page === "details"  && <DetailsPage fb={fb} setDetail={setDetail} totals={totals} />}
+      {page === "details"  && <DetailsPage fb={fb} setDetail={setDetail} totals={totals} globalStaff={globalStaff} />}
       {page === "matrix"   && <MatrixPage fb={fb} setFb={setFb} score={matrixScore} />}
       {page === "roster"   && <RosterPage fb={fb} setFb={setFb} globalStaff={globalStaff} />}
       {page === "team"     && <TeamPage fb={fb} setFb={setFb} stages={allStages} fmt={fmt} />}

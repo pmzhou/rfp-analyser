@@ -11,6 +11,7 @@ import {
   Copy as CopyIcon, FilePdf, FileXls, Trophy, Books, Eye, Warning, Globe, Receipt, PaperPlaneTilt, UploadSimple, Calculator
 } from "@phosphor-icons/react";
 import FeeBuilder from "@/pages/FeeBuilder";
+import { formatDate } from "@/lib/dates";
 
 const TABS = [
   { id: "overview", label: "Overview", icon: Buildings },
@@ -461,7 +462,7 @@ const AnalysisTab = ({ projectId, analysis, onUpdate }) => {
         <RowsSection label="Key Dates" icon={<Calendar size={12} weight="bold"/>}
           rows={draft.key_dates || []} editing={editing==="key_dates"} onEdit={()=>setEditing("key_dates")}
           columns={[
-            { key: "date", label: "Date", w: "w-40", mono: true },
+            { key: "date", label: "Date", w: "w-40", mono: true, dateFormat: true },
             { key: "label", label: "Label" },
             { key: "type", label: "Type", w: "w-40", select: ["submission","kickoff","milestone","interview","site_visit","other"] },
           ]}
@@ -751,6 +752,8 @@ const RowsSection = ({ label, icon, rows, editing, onEdit, columns, onUpdate, bl
                           {r[c.key].map((s, j) => <li key={j}>{s}</li>)}
                         </ul>
                       ) : <span className="text-zinc-400">—</span>
+                    ) : c.dateFormat ? (
+                      <span className={c.mono ? 'font-mono text-xs' : ''}>{formatDate(r[c.key])}</span>
                     ) : (
                       <span>{r[c.key] || (c.key==="id" ? `R-${String(i+1).padStart(3,'0')}` : "—")}</span>
                     )

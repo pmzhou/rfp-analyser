@@ -1,9 +1,10 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useState, useMemo } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { api } from "@/lib/api";
 import Layout from "@/components/Layout";
 import { toast } from "sonner";
-import { Plus, FolderOpen, ArrowRight, X, FileText } from "@phosphor-icons/react";
+import { Plus, FolderOpen, ArrowRight, X, FileText, Trophy, ChartLineUp, CurrencyDollar, ClockCounterClockwise } from "@phosphor-icons/react";
+import { formatDate } from "@/lib/dates";
 
 const STATUS_LABELS = {
   draft: "Draft",
@@ -71,6 +72,8 @@ const Dashboard = () => {
         </div>
       </section>
 
+      <Analytics projects={projects} />
+
       <section className="px-6 lg:px-10 py-10 max-w-[1600px]">
         {loading ? (
           <div className="text-zinc-500 font-mono text-sm">Loading…</div>
@@ -102,7 +105,7 @@ const Dashboard = () => {
                   <div className="text-xs text-zinc-500 font-mono">{p.client_name || "—"}</div>
                 </div>
                 <div className="flex items-center justify-between text-[10px] font-mono uppercase tracking-[0.15em] text-zinc-500">
-                  <span>{new Date(p.created_at).toLocaleDateString()}</span>
+                  <span>{formatDate(p.created_at)}</span>
                   <span className="flex items-center gap-1 text-[#0055FF] opacity-0 group-hover:opacity-100 transition-opacity">
                     Open <ArrowRight size={12} weight="bold" />
                   </span>
@@ -161,5 +164,106 @@ const Dashboard = () => {
     </Layout>
   );
 };
+
+// ----- Analytics ----- //
+const Analytics = ({ projects }) => {
+  const stats = useMemo(() => {
+    const total = projects.length;
+    const analysed = projects.filter(p => p.analysis).length;
+    const won = projects.filter(p => p.outcome === "won").length;
+    const lost = projects.filter(p => p.outcome === "lost").length;
+    const pending = projects.filter(p => !p.outcome || p.outcome === "pending").length;
+    const abandoned = projects.filter(p => p.outcome === "abandoned").length;
+    const decided = won + lost;
+    const winRate = decided > 0 ? (won / decided * 100) : 0;
+    // Total awarded value, by currency
+    const awardedByCur = {};
+    projects.forEach(p => {
+      if (p.outcome === "won" && p.awarded_amount) {
+        const cur = (p.fee_builder?.details?.currency) || (p.analysis?.financial_terms?.currency) || "AED";
+        awardedByCur[cur] = (awardedByCur[cur] || 0) + Number(p.awarded_amount || 0);
+      }
+    });
+    // Status distribution
+    const statusBreakdown = ["draft","analysing","analysed","distributed","merged"]
+      .map(s => ({ s, n: projects.filter(p => p.status === s).length }))
+      .filter(r => r.n > 0);
+    return { total, analysed, won, lost, pending, abandoned, winRate, awardedByCur, statusBreakdown };
+  }, [projects]);
+
+  if (stats.total === 0) return null;
+
+  return (
+    <section className="border-b border-zinc-200" data-testid="analytics-section">
+      <div className="px-6 lg:px-10 py-8 max-w-[1600px]">
+        <div className="overline mb-4">Analytics</div>
+        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-0 border border-zinc-200">
+          <KPI label="Total RFPs" value={stats.total} icon={FileText} />
+          <KPI label="Analysed" value={stats.analysed} icon={ChartLineUp} sub={`${stats.total ? Math.round(stats.analysed/stats.total*100) : 0}%`} />
+          <KPI label="Won" value={stats.won} icon={Trophy} cls="text-[#007A38]" />
+          <KPI label="Lost" value={stats.lost} icon={X} cls="text-[#B22318]" />
+          <KPI label="Pending" value={stats.pending} icon={ClockCounterClockwise} />
+          <KPI label="Win rate" value={`${stats.winRate.toFixed(0)}%`} icon={ChartLineUp} sub={stats.won + stats.lost > 0 ? `${stats.won}/${stats.won+stats.lost} decided` : "—"} />
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-0 border border-zinc-200 border-t-0">
+          {/* Awarded value */}
+          <div className="p-6 border-r border-zinc-200">
+            <div className="overline mb-3 flex items-center gap-2"><CurrencyDollar size={12} weight="bold"/> Total awarded value</div>
+            {Object.keys(stats.awardedByCur).length === 0 ? (
+              <div className="text-sm text-zinc-500">No won projects with awarded amount yet.</div>
+            ) : (
+              <div className="space-y-2">
+                {Object.entries(stats.awardedByCur).map(([cur, total]) => (
+                  <div key={cur} className="flex items-baseline justify-between">
+                    <span className="overline">{cur}</span>
+                    <span className="font-display font-black text-2xl tracking-tighter font-mono" data-testid={`awarded-${cur}`}>
+                      {Number(total).toLocaleString(undefined, {minimumFractionDigits: 0, maximumFractionDigits: 0})}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+          {/* Pipeline distribution */}
+          <div className="p-6">
+            <div className="overline mb-3">Pipeline status</div>
+            {stats.statusBreakdown.length === 0 ? (
+              <div className="text-sm text-zinc-500">No pipeline data.</div>
+            ) : (
+              <div className="space-y-3">
+                {stats.statusBreakdown.map(({s, n}) => {
+                  const pct = stats.total > 0 ? (n / stats.total * 100) : 0;
+                  return (
+                    <div key={s}>
+                      <div className="flex justify-between text-xs mb-1">
+                        <span className="overline">{s}</span>
+                        <span className="font-mono font-semibold">{n} · {pct.toFixed(0)}%</span>
+                      </div>
+                      <div className="h-1.5 bg-zinc-100">
+                        <div className="h-full bg-[#0055FF] transition-all" style={{ width: `${pct}%` }}/>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    </section>
+  );
+};
+
+const KPI = ({ label, value, sub, icon: Icon, cls }) => (
+  <div className="p-5 border-r border-b last:border-r-0 border-zinc-200">
+    <div className="flex items-center justify-between mb-2">
+      <div className="overline">{label}</div>
+      {Icon && <Icon size={14} weight="bold" className="text-zinc-400"/>}
+    </div>
+    <div className={`font-display font-black text-3xl tracking-tighter ${cls||''}`}>{value}</div>
+    {sub && <div className="text-[10px] uppercase tracking-[0.15em] font-mono text-zinc-500 mt-1">{sub}</div>}
+  </div>
+);
 
 export default Dashboard;

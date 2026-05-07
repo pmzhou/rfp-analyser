@@ -3,6 +3,7 @@ import { useParams } from "react-router-dom";
 import axios from "axios";
 import { toast } from "sonner";
 import { Buildings, ArrowRight, CheckCircle, Calendar } from "@phosphor-icons/react";
+import { formatDate } from "@/lib/dates";
 
 const API = `${process.env.REACT_APP_BACKEND_URL}/api`;
 
@@ -111,7 +112,7 @@ const RespondPage = () => {
                   <tbody>
                     {project.key_dates.map((kd, i) => (
                       <tr key={i} className="border-b border-zinc-200 last:border-b-0">
-                        <td className="px-4 py-3 font-mono text-xs w-32">{kd.date}</td>
+                        <td className="px-4 py-3 font-mono text-xs w-32">{formatDate(kd.date)}</td>
                         <td className="px-4 py-3 text-sm">{kd.label}</td>
                         <td className="px-4 py-3 text-[10px] uppercase tracking-[0.15em] font-mono w-32">{kd.type}</td>
                       </tr>
