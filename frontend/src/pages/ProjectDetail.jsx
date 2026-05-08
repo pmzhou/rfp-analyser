@@ -1306,7 +1306,14 @@ const StatusPill = ({ status }) => {
 // ---- Fee merger ---- //
 const FeesTab = ({ projectId }) => {
   const [data, setData] = useState(null);
-  useEffect(() => { api.get(`/projects/${projectId}/fees`).then(r => setData(r.data)); }, [projectId]);
+  const [error, setError] = useState(null);
+  useEffect(() => {
+    setError(null);
+    api.get(`/projects/${projectId}/fees`)
+      .then(r => setData(r.data))
+      .catch(e => setError(e?.response?.data?.detail || "Could not load fee summary"));
+  }, [projectId]);
+  if (error) return <div className="border border-dashed border-[#FF3B30]/50 bg-[#FF3B30]/5 p-8 text-sm text-[#B22318]" data-testid="fees-error">{error}</div>;
   if (!data) return <div className="text-zinc-500 font-mono text-sm">Loading…</div>;
 
   const submitted = data.invites.filter(i => i.status === "submitted");
