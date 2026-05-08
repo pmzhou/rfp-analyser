@@ -738,9 +738,282 @@ async def remove_invite(project_id: str, invite_id: str, user=Depends(get_curren
     return {"ok": True}
 
 
-# Public endpoints (no auth) for sub-consultants
-@api.get("/public/invites/{token}")
-async def public_get_invite(token: str):
+DEFAULT_NDA_TEMPLATE = """NON-DISCLOSURE AGREEMENT
+
+This Non-Disclosure Agreement (the "Agreement") is entered into on {{signing_date}}
+by and between:
+
+  Disclosing Party: {{owner_name}} ({{owner_email}})
+  Receiving Party : {{consultant_name}}, {{consultant_company}} ({{consultant_email}})
+
+in connection with the proposed engagement on the project titled
+"{{project_title}}" for client "{{client_name}}" (the "Project"), specifically
+the {{discipline}} discipline.
+
+1. CONFIDENTIAL INFORMATION. "Confidential Information" means all non-public
+information disclosed by the Disclosing Party relating to the Project,
+including but not limited to: requirements, technical specifications, scope,
+financial terms, drawings, schedules, client identity, and any documents
+shared via this portal.
+
+2. OBLIGATIONS. The Receiving Party agrees: (a) to hold all Confidential
+Information in strict confidence; (b) to use it solely for the purpose of
+preparing a fee proposal for the Project; (c) not to disclose it to any
+third party without prior written consent of the Disclosing Party;
+(d) to protect it with the same degree of care it uses for its own
+confidential information, and not less than reasonable care.
+
+3. EXCLUSIONS. Confidential Information does not include information that:
+(a) was already known to the Receiving Party without obligation of
+confidence; (b) is or becomes publicly available through no fault of the
+Receiving Party; (c) is independently developed without use of the
+Confidential Information; (d) must be disclosed by law, provided the
+Receiving Party gives prompt notice.
+
+4. TERM. This Agreement remains in effect for two (2) years from the date
+of signing, regardless of whether the Receiving Party participates further
+in the Project.
+
+5. NO LICENCE. Nothing in this Agreement grants the Receiving Party any
+licence, ownership or other right in any Confidential Information.
+
+6. RETURN OR DESTRUCTION. Upon written request, the Receiving Party will
+promptly return or destroy all Confidential Information.
+
+7. GOVERNING LAW. This Agreement is governed by the laws of the
+Disclosing Party's jurisdiction.
+
+By signing electronically below, the Receiving Party acknowledges that:
+they are authorised to sign on behalf of the company; the typed name
+constitutes a legally binding signature; and they have read and agree to
+all terms above.
+
+Signed by : {{consultant_name}}
+Email     : {{consultant_email}}
+Date      : {{signing_date}}
+IP address: {{signing_ip}}
+"""
+
+
+def _render_nda(template: str, ctx: Dict[str, Any]) -> str:
+    out = template
+    for k, v in ctx.items():
+        out = out.replace("{{" + k + "}}", str(v or ""))
+    return out
+
+
+@api.get("/public/invites/{token}/eoi")
+async def public_get_eoi(token: str):
+    inv = await db.invites.find_one({"share_token": token}, {"_id": 0})
+    if not inv:
+        raise HTTPException(404, "Invite not found")
+    proj = await db.projects.find_one(
+        {"id": inv["project_id"]},
+        {"_id": 0, "title": 1, "client_name": 1, "analysis": 1, "owner_id": 1}
+    )
+    # Mark EOI viewed if first time
+    upd = {}
+    if not inv.get("eoi_viewed_at"):
+        upd["eoi_viewed_at"] = now()
+    if upd:
+        await db.invites.update_one({"share_token": token}, {"$set": upd})
+        inv.update(upd)
+    summary = ""
+    submission_date = None
+    if proj and proj.get("analysis"):
+        a = proj["analysis"]
+        summary = a.get("summary", "")
+        for d in (a.get("key_dates") or []):
+            if (d.get("type") or "").lower() == "submission":
+                submission_date = d.get("date")
+                break
+    client_name = proj.get("client_name", "") if proj else ""
+    if inv.get("anonymise_client"):
+        client_name = "Confidential client"
+    return {
+        "invite_status": inv.get("status"),
+        "skip_nda": bool(inv.get("skip_nda")),
+        "interested_at": inv.get("interested_at"),
+        "declined_at": inv.get("declined_at"),
+        "nda_signed_at": inv.get("nda_signed_at"),
+        "discipline": inv.get("discipline"),
+        "consultant_name": inv.get("consultant_name"),
+        "consultant_company": inv.get("consultant_company"),
+        "project": {
+            "title": proj.get("title") if proj else "",
+            "client_name": client_name,
+            "summary": summary,
+            "submission_date": submission_date,
+        },
+    }
+
+
+class InterestIn(BaseModel):
+    interested: bool
+    reason: Optional[str] = ""
+
+
+@api.post("/public/invites/{token}/interest")
+async def public_interest(token: str, body: InterestIn):
+    inv = await db.invites.find_one({"share_token": token})
+    if not inv:
+        raise HTTPException(404, "Invite not found")
+    upd: Dict[str, Any] = {}
+    if body.interested:
+        upd = {"interested_at": now(), "status": "interested"}
+    else:
+        upd = {"declined_at": now(), "decline_reason": body.reason or "", "status": "declined", "decline_stage": "eoi"}
+    await db.invites.update_one({"share_token": token}, {"$set": upd})
+    return {"ok": True}
+
+
+async def _resolve_nda_template(user_id: str) -> str:
+    """Pick the user's default NDA template, else a stored 'first' one, else the built-in default."""
+    s = await db.settings.find_one({"user_id": user_id}, {"_id": 0})
+    if s and s.get("default_nda_id"):
+        item = await db.library.find_one({"id": s["default_nda_id"], "owner_id": user_id, "type": "nda_template"}, {"_id": 0})
+        if item and item.get("nda_text"):
+            return item["nda_text"]
+    item = await db.library.find_one({"owner_id": user_id, "type": "nda_template"}, sort=[("created_at", -1)])
+    if item and item.get("nda_text"):
+        return item["nda_text"]
+    return DEFAULT_NDA_TEMPLATE
+
+
+@api.get("/public/invites/{token}/nda")
+async def public_get_nda(token: str):
+    inv = await db.invites.find_one({"share_token": token})
+    if not inv:
+        raise HTTPException(404, "Invite not found")
+    if inv.get("declined_at"):
+        raise HTTPException(400, "Invite declined")
+    proj = await db.projects.find_one({"id": inv["project_id"]}, {"_id": 0})
+    if not proj:
+        raise HTTPException(404, "Project not found")
+    owner = await db.users.find_one({"id": proj["owner_id"]}, {"_id": 0})
+    template = await _resolve_nda_template(proj["owner_id"])
+    ctx = {
+        "owner_name": owner.get("name", "") if owner else "",
+        "owner_email": owner.get("email", "") if owner else "",
+        "consultant_name": inv.get("consultant_name", ""),
+        "consultant_email": inv.get("consultant_email", ""),
+        "consultant_company": inv.get("consultant_company", ""),
+        "project_title": proj.get("title", ""),
+        "client_name": "Confidential client" if inv.get("anonymise_client") else proj.get("client_name", ""),
+        "discipline": inv.get("discipline", ""),
+        "signing_date": datetime.now(timezone.utc).strftime("%d/%m/%Y"),
+        "signing_ip": "",
+    }
+    return {"template": template, "rendered": _render_nda(template, ctx), "context": ctx,
+            "already_signed": bool(inv.get("nda_signed_at"))}
+
+
+class NDASignIn(BaseModel):
+    typed_name: str = Field(min_length=2)
+    email_confirm: EmailStr
+    agree: bool
+
+
+@api.post("/public/invites/{token}/nda/sign")
+async def public_sign_nda(request: Request, token: str, body: NDASignIn):
+    inv = await db.invites.find_one({"share_token": token})
+    if not inv:
+        raise HTTPException(404, "Invite not found")
+    if not body.agree:
+        raise HTTPException(400, "You must tick the agreement checkbox")
+    proj = await db.projects.find_one({"id": inv["project_id"]}, {"_id": 0})
+    owner = await db.users.find_one({"id": proj["owner_id"]}, {"_id": 0})
+    template = await _resolve_nda_template(proj["owner_id"])
+    ip = request.client.host if request.client else ""
+    signing_date = datetime.now(timezone.utc).strftime("%d/%m/%Y")
+    ctx = {
+        "owner_name": owner.get("name", "") if owner else "",
+        "owner_email": owner.get("email", "") if owner else "",
+        "consultant_name": inv.get("consultant_name", ""),
+        "consultant_email": inv.get("consultant_email", ""),
+        "consultant_company": inv.get("consultant_company", ""),
+        "project_title": proj.get("title", ""),
+        "client_name": "Confidential client" if inv.get("anonymise_client") else proj.get("client_name", ""),
+        "discipline": inv.get("discipline", ""),
+        "signing_date": signing_date,
+        "signing_ip": ip,
+    }
+    text_snapshot = _render_nda(template, ctx)
+    upd = {
+        "nda_signed_at": now(),
+        "nda_signed_name": body.typed_name,
+        "nda_signed_email": body.email_confirm.lower(),
+        "nda_signed_ip": ip,
+        "nda_text_snapshot": text_snapshot,
+        "status": "nda_signed",
+    }
+    await db.invites.update_one({"share_token": token}, {"$set": upd})
+    return {"ok": True}
+
+
+@api.get("/public/invites/{token}/nda/pdf")
+async def public_nda_pdf(token: str):
+    inv = await db.invites.find_one({"share_token": token}, {"_id": 0})
+    if not inv or not inv.get("nda_text_snapshot"):
+        raise HTTPException(404, "Signed NDA not found")
+    pdf = _nda_pdf(inv)
+    return Response(pdf, media_type="application/pdf",
+                    headers={"Content-Disposition": f'attachment; filename="NDA_{inv.get("consultant_name","").replace(" ","_")}.pdf"'})
+
+
+@api.get("/projects/{project_id}/invites/{invite_id}/nda/pdf")
+async def owner_nda_pdf(project_id: str, invite_id: str, user=Depends(get_current_user)):
+    p = await db.projects.find_one({"id": project_id, "owner_id": user["id"]})
+    if not p:
+        raise HTTPException(404, "Project not found")
+    inv = await db.invites.find_one({"id": invite_id, "project_id": project_id}, {"_id": 0})
+    if not inv or not inv.get("nda_text_snapshot"):
+        raise HTTPException(404, "Signed NDA not found")
+    pdf = _nda_pdf(inv)
+    return Response(pdf, media_type="application/pdf",
+                    headers={"Content-Disposition": f'attachment; filename="NDA_{inv.get("consultant_name","").replace(" ","_")}.pdf"'})
+
+
+def _nda_pdf(invite: Dict[str, Any]) -> bytes:
+    import io as _io
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib.units import mm
+    from reportlab.pdfgen import canvas as _canvas
+    buf = _io.BytesIO()
+    c = _canvas.Canvas(buf, pagesize=A4)
+    width, height = A4
+    margin = 18 * mm
+    y = height - margin
+    c.setFont("Helvetica-Bold", 14)
+    c.drawString(margin, y, "Signed Non-Disclosure Agreement")
+    y -= 8 * mm
+    c.setFont("Helvetica", 9)
+    c.setFillGray(0.4)
+    c.drawString(margin, y, f"Signed: {invite.get('nda_signed_at','')}   ·   IP: {invite.get('nda_signed_ip','')}")
+    y -= 8 * mm
+    c.setFillGray(0)
+    c.setFont("Helvetica", 10)
+    for line in (invite.get("nda_text_snapshot") or "").split("\n"):
+        if y < margin + 20 * mm:
+            c.showPage(); c.setFont("Helvetica", 10); y = height - margin
+        # naive wrap at ~95 chars
+        chunk = line
+        while len(chunk) > 95:
+            c.drawString(margin, y, chunk[:95]); y -= 12; chunk = chunk[95:]
+            if y < margin + 20 * mm:
+                c.showPage(); c.setFont("Helvetica", 10); y = height - margin
+        c.drawString(margin, y, chunk); y -= 12
+    c.save()
+    return buf.getvalue()
+
+
+# Restrict the existing /public/invites/{token} so full details only flow after NDA signed (or skip_nda)
+async def _ensure_full_access(invite: Dict[str, Any]) -> None:
+    if invite.get("skip_nda"):
+        return
+    if invite.get("nda_signed_at"):
+        return
+    raise HTTPException(403, "NDA not yet signed")
     inv = await db.invites.find_one({"share_token": token}, {"_id": 0})
     if not inv:
         raise HTTPException(404, "Invite not found")
