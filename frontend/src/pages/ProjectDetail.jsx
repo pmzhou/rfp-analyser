@@ -8,7 +8,7 @@ import {
   Money, ChatCircleText, ArrowRight, Plus, Copy, Envelope,
   CheckCircle, XCircle, Clock, ArrowLeft, Buildings,
   PencilSimple, FloppyDisk, X as XIcon,
-  Copy as CopyIcon, FilePdf, FileXls, Trophy, Books, Eye, Warning, Globe, Receipt, PaperPlaneTilt, UploadSimple, Calculator
+  Copy as CopyIcon, FilePdf, FileXls, Trophy, Books, Eye, Warning, Globe, Receipt, PaperPlaneTilt, UploadSimple, Calculator, ShieldCheck, DownloadSimple, Hourglass
 } from "@phosphor-icons/react";
 import FeeBuilder from "@/pages/FeeBuilder";
 import { formatDate } from "@/lib/dates";
@@ -1011,6 +1011,33 @@ const DisciplinesTab = ({ projectId, project, invites, setInvites }) => {
     } catch (e) { toast.error(e?.response?.data?.detail || "Send failed"); }
   };
 
+  const toggleSkipNda = async (inv) => {
+    try {
+      const { data } = await api.patch(`/projects/${projectId}/invites/${inv.id}`, { skip_nda: !inv.skip_nda });
+      setInvites(invites.map(i => i.id === inv.id ? { ...i, ...data } : i));
+      toast.success(data.skip_nda ? "NDA skipped for this invite" : "NDA required for this invite");
+    } catch (e) { toast.error(e?.response?.data?.detail || "Failed"); }
+  };
+
+  const toggleAnonymise = async (inv) => {
+    try {
+      const { data } = await api.patch(`/projects/${projectId}/invites/${inv.id}`, { anonymise_client: !inv.anonymise_client });
+      setInvites(invites.map(i => i.id === inv.id ? { ...i, ...data } : i));
+      toast.success(data.anonymise_client ? "Client name hidden in EOI/NDA" : "Client name visible");
+    } catch (e) { toast.error(e?.response?.data?.detail || "Failed"); }
+  };
+
+  const downloadNda = async (inv) => {
+    try {
+      const res = await api.get(`/projects/${projectId}/invites/${inv.id}/nda/pdf`, { responseType: "blob" });
+      const url = URL.createObjectURL(new Blob([res.data], { type: "application/pdf" }));
+      const a = document.createElement("a");
+      a.href = url; a.download = `NDA_${(inv.consultant_name||"signed").replace(/\s+/g,"_")}.pdf`;
+      document.body.appendChild(a); a.click(); a.remove();
+      URL.revokeObjectURL(url);
+    } catch (e) { toast.error(e?.response?.data?.detail || "Signed NDA not available"); }
+  };
+
   return (
     <div>
       <div className="flex items-center justify-between mb-6 flex-wrap gap-3">
@@ -1105,21 +1132,59 @@ const DisciplinesTab = ({ projectId, project, invites, setInvites }) => {
       {invites.length === 0 ? (
         <div className="border border-dashed border-zinc-300 p-12 text-center text-sm text-zinc-500">No invites yet.</div>
       ) : (
+        <>
+          {(() => {
+            const declined = invites.filter(i => i.status === "declined");
+            if (declined.length === 0) return null;
+            const disciplinesNeedingReplacement = [...new Set(declined.map(d => d.discipline))]
+              .filter(disc => !invites.some(i => i.discipline === disc && i.status !== "declined"));
+            if (disciplinesNeedingReplacement.length === 0) return null;
+            return (
+              <div className="border-l-4 border-[#FF8800] bg-[#FF8800]/5 p-4 mb-4 flex items-start gap-3" data-testid="replacement-banner">
+                <Warning size={18} weight="bold" className="text-[#FF8800] mt-0.5"/>
+                <div className="flex-1">
+                  <div className="overline text-[#FF8800] mb-1">Replacement needed</div>
+                  <p className="text-sm">{disciplinesNeedingReplacement.length === 1 ? "1 discipline has" : `${disciplinesNeedingReplacement.length} disciplines have`} no active sub-consultant after a decline: <span className="font-mono text-xs">{disciplinesNeedingReplacement.join(" · ")}</span>. Add a replacement invite to keep coverage.</p>
+                </div>
+                <button onClick={() => { setForm({ ...form, discipline: disciplinesNeedingReplacement[0] }); setShowForm(true); }} data-testid="invite-replacement-btn"
+                  className="px-3 py-2 bg-[#FF8800] text-white text-[10px] font-semibold uppercase tracking-[0.15em] hover:bg-[#0A0A0B] transition-colors whitespace-nowrap">
+                  Invite replacement
+                </button>
+              </div>
+            );
+          })()}
         <div className="border border-zinc-200">
           {invites.map((inv) => (
-            <div key={inv.id} className="border-b border-zinc-200 last:border-b-0 p-5 grid grid-cols-1 lg:grid-cols-12 gap-4 items-center" data-testid={`invite-${inv.id}`}>
+            <div key={inv.id} className="border-b border-zinc-200 last:border-b-0 p-5 grid grid-cols-1 lg:grid-cols-12 gap-4 items-start" data-testid={`invite-${inv.id}`}>
               <div className="lg:col-span-3">
                 <div className="text-[10px] uppercase tracking-[0.18em] font-mono text-zinc-500">Discipline</div>
                 <div className="font-display font-bold text-sm tracking-tight">{inv.discipline}</div>
+                <div className="flex flex-wrap gap-1 mt-2">
+                  <button onClick={() => toggleSkipNda(inv)} title="Skip NDA — sub-consultant proceeds straight to full details" data-testid={`skip-nda-toggle-${inv.id}`}
+                    className={`text-[9px] uppercase tracking-[0.15em] font-mono px-2 py-0.5 border transition-colors ${inv.skip_nda ? 'bg-[#0A0A0B] text-white border-[#0A0A0B]' : 'border-zinc-300 text-zinc-500 hover:border-[#0A0A0B]'}`}>
+                    {inv.skip_nda ? "NDA: skipped" : "NDA: required"}
+                  </button>
+                  <button onClick={() => toggleAnonymise(inv)} title="Hide client name on EOI &amp; NDA" data-testid={`anonymise-toggle-${inv.id}`}
+                    className={`text-[9px] uppercase tracking-[0.15em] font-mono px-2 py-0.5 border transition-colors ${inv.anonymise_client ? 'bg-[#FF8800] text-white border-[#FF8800]' : 'border-zinc-300 text-zinc-500 hover:border-[#0A0A0B]'}`}>
+                    {inv.anonymise_client ? "Client: hidden" : "Client: visible"}
+                  </button>
+                </div>
               </div>
               <div className="lg:col-span-3">
                 <div className="text-[10px] uppercase tracking-[0.18em] font-mono text-zinc-500">Consultant</div>
                 <div className="text-sm font-medium">{inv.consultant_name}</div>
                 <div className="text-xs text-zinc-500 truncate">{inv.consultant_email}</div>
+                {inv.decline_reason && <div className="text-[10px] text-[#B22318] mt-1 italic">"{inv.decline_reason}"</div>}
               </div>
               <div className="lg:col-span-2">
                 <div className="text-[10px] uppercase tracking-[0.18em] font-mono text-zinc-500">Status</div>
                 <StatusPill status={inv.status} />
+                {inv.nda_signed_at && (
+                  <button onClick={() => downloadNda(inv)} data-testid={`download-nda-${inv.id}`} title="Download signed NDA PDF"
+                    className="mt-2 inline-flex items-center gap-1 text-[10px] uppercase tracking-[0.15em] font-semibold text-[#0055FF] hover:text-[#0A0A0B] transition-colors">
+                    <DownloadSimple size={12} weight="bold"/> NDA PDF
+                  </button>
+                )}
               </div>
               <div className="lg:col-span-2">
                 <div className="text-[10px] uppercase tracking-[0.18em] font-mono text-zinc-500">Fee</div>
@@ -1146,6 +1211,7 @@ const DisciplinesTab = ({ projectId, project, invites, setInvites }) => {
             </div>
           ))}
         </div>
+        </>
       )}
     </div>
   );
@@ -1222,10 +1288,13 @@ const BulkInvitePanel = ({ projectId, disciplines, onCreated, onClose }) => {
 const StatusPill = ({ status }) => {
   const cfg = {
     sent: { label: "Sent", icon: Clock, cls: "bg-zinc-100 text-zinc-700" },
-    viewed: { label: "Viewed", icon: Clock, cls: "bg-[#FFCC00]/20 text-[#9B7800]" },
+    viewed: { label: "EOI viewed", icon: Eye, cls: "bg-[#FFCC00]/20 text-[#9B7800]" },
+    interested: { label: "Interested", icon: Hourglass, cls: "bg-[#FF8800]/15 text-[#9B5500]" },
+    nda_signed: { label: "NDA signed", icon: ShieldCheck, cls: "bg-[#0055FF]/15 text-[#0033AA]" },
+    viewing_details: { label: "Reviewing", icon: Eye, cls: "bg-[#0055FF]/15 text-[#0033AA]" },
     submitted: { label: "Submitted", icon: CheckCircle, cls: "bg-[#00C35A]/15 text-[#007A38]" },
     declined: { label: "Declined", icon: XCircle, cls: "bg-[#FF3B30]/15 text-[#B22318]" },
-  }[status] || { label: status, icon: Clock, cls: "bg-zinc-100" };
+  }[status] || { label: status || "—", icon: Clock, cls: "bg-zinc-100" };
   const Icon = cfg.icon;
   return (
     <span className={`inline-flex items-center gap-1 px-2 py-1 text-[10px] uppercase tracking-[0.15em] font-mono ${cfg.cls}`}>

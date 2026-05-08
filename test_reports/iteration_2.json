@@ -1,0 +1,57 @@
+{
+  "summary": "Comprehensive backend + frontend regression for the new EOI -> NDA -> Full Details public flow. 29/29 backend pytest passing. All 4 frontend flows verified end-to-end via Playwright: 3-step state machine, EOI decline terminal screen, Settings NDA Templates tab (built-in prefill + default pill + save), ProjectDetail Disciplines tab (skip-NDA/anonymise toggles + replacement banner with discipline pre-fill).",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_eoi_nda_flow.py",
+    "/app/backend/tests/test_rfp_backend.py",
+    "/app/test_reports/pytest/eoi_nda_results.xml"
+  ],
+  "verified_flows": [
+    "GET /api/public/invites/{token}/eoi marks invite viewed and returns project summary, anonymise honoured",
+    "GET /details returns 403 before NDA, 200 after sign or skip_nda=true",
+    "POST /respond returns 403 before NDA, 200 after",
+    "GET /nda/pdf returns 404 before signing, application/pdf >1KB starting with %PDF after signing",
+    "POST /nda/sign 400 if agree=false, 200 success, status -> nda_signed, already_signed flag flips true",
+    "GET /library/nda/builtin returns ~2.4KB built-in NDA, 401 without auth",
+    "POST /library type=nda_template is_default=true updates settings.default_nda_id and overrides built-in for sub-consultant fetch",
+    "PATCH skip_nda=true unblocks /details and /respond",
+    "PATCH anonymise_client=true replaces real client_name with 'Confidential client' on EOI and rendered NDA",
+    "POST /interest interested=false sets status=declined, decline_stage=eoi, decline_reason captured",
+    "POST /respond status=declined after NDA-signed sets decline_stage=details",
+    "Frontend RespondPage: EOI step -> click 'I'm interested' -> NDA step -> sign-button disabled until agree -> sign -> Details step -> submit -> 'Response Recorded' toast",
+    "Frontend RespondPage: EOI -> Decline -> reason -> DeclinedView terminal screen 'Invitation declined'",
+    "Frontend Settings -> NDA Templates: 'Use built-in' prefills 2459-char NDA, save shows item with 'Default' pill",
+    "Frontend ProjectDetail -> Disciplines: replacement banner shows declined discipline (MEP), 'Invite replacement' pre-fills MEP in form"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "server.py is 1240 lines - approaching the 700-line guideline; consider splitting public flow + library + invites into routers/modules.",
+    "DEFAULT_NDA_TEMPLATE is governed by Disclosing Party's jurisdiction with no jurisdiction value - acceptable for MVP but flag for legal review before production.",
+    "_notify_owner uses asyncio.create_task without keeping references; tasks may be GC'd. Acceptable for fire-and-forget but consider a task set.",
+    "PUBLIC_BASE_URL env var is NOT set in /app/backend/.env so SMTP notification share_url and 'Open project' link in owner emails will be relative paths only.",
+    "/app/backend/tests/test_rfp_backend.py is now stale: test_public_get_invite_no_auth and test_public_respond_no_auth call the OLD pre-flow endpoints and will fail (the old GET /api/public/invites/{token} no longer exists; respond now requires NDA). Replace with test_eoi_nda_flow.py going forward.",
+    "@app.on_event('shutdown') is deprecated FastAPI - replace with lifespan context manager.",
+    "JWT_SECRET in .env is the literal placeholder 'change-me-in-production-rfp-analyser-secret-key'."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_eoi_nda_flow.py (new)"
+  ],
+  "success_rate": {
+    "backend": "100% (29/29 new flow tests)",
+    "frontend": "100% (4/4 critical flows)"
+  },
+  "test_credentials": "demo@rfpqa.example.com / DemoPass123! (existing seeded). New tests create eoiowner_<rand>@rfpqa.example.com.",
+  "seed_data_creation": "Tests create one project + 6 invites + 1 NDA template per run. Cleanup test deletes the template and project (cascade-deletes invites). Manual UI test data was deleted post-run.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Use /app/backend/tests/test_eoi_nda_flow.py as the regression suite for the EOI/NDA/details flow - it does NOT call /analyze (LLM exhausted). The older /app/backend/tests/test_rfp_backend.py has 2 stale tests against deleted endpoints and triggers /analyze - either skip or rewrite if regression on legacy paths is needed. PUBLIC_BASE_URL is unset; SMTP notifications use relative URLs. demo@rfpqa.example.com login still works.",
+  "rca of the issue": "No bugs found. Previous session's blockers (missing Request import, broken _ensure_full_access dead code) are confirmed fixed - public/{token}/nda/sign captures request.client.host correctly and _require_full_access cleanly returns on skip_nda or nda_signed_at."
+}

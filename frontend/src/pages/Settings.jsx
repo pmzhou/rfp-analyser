@@ -2,7 +2,7 @@ import React, { useEffect, useState } from "react";
 import { api } from "@/lib/api";
 import Layout from "@/components/Layout";
 import { toast } from "sonner";
-import { EnvelopeSimple, Robot, Books, Receipt, Users as UsersIcon, IdentificationCard, FloppyDisk, Plus, Trash, PaperPlaneRight, ArrowLeft, Sliders } from "@phosphor-icons/react";
+import { EnvelopeSimple, Robot, Books, Receipt, Users as UsersIcon, IdentificationCard, FloppyDisk, Plus, Trash, PaperPlaneRight, ArrowLeft, Sliders, ShieldCheck } from "@phosphor-icons/react";
 import { Link } from "react-router-dom";
 import { usePrefs } from "@/contexts/PrefsContext";
 
@@ -14,6 +14,7 @@ const TABS = [
   { id: "fees", label: "Fee Templates", icon: Receipt },
   { id: "staff", label: "Staff Roster", icon: IdentificationCard },
   { id: "contacts", label: "Address Book", icon: UsersIcon },
+  { id: "nda", label: "NDA Templates", icon: ShieldCheck },
 ];
 
 const Settings = () => {
@@ -48,6 +49,7 @@ const Settings = () => {
         {tab === "fees" && <LibraryTab type="fee_template" />}
         {tab === "staff" && <LibraryTab type="staff" />}
         {tab === "contacts" && <LibraryTab type="contact" />}
+        {tab === "nda" && <NdaTemplatesTab />}
       </section>
     </Layout>
   );
@@ -496,5 +498,131 @@ const Field = ({ label, value, onChange, type="text", placeholder, testid }) => 
       className="w-full px-3 py-3 border border-[#0A0A0B] focus:outline-none focus:ring-2 focus:ring-[#0055FF] text-sm" />
   </div>
 );
+
+// ---------- NDA Templates ---------- //
+const NdaTemplatesTab = () => {
+  const [items, setItems] = useState([]);
+  const [draft, setDraft] = useState(null);
+  const [loading, setLoading] = useState(true);
+
+  const load = async () => {
+    setLoading(true);
+    try { const { data } = await api.get("/library?type=nda_template"); setItems(data); }
+    finally { setLoading(false); }
+  };
+  useEffect(() => { load(); }, []);
+
+  const newDraft = async (prefill = false) => {
+    let nda_text = "";
+    if (prefill) {
+      try { const { data } = await api.get("/library/nda/builtin"); nda_text = data.nda_text; }
+      catch { /* ignore */ }
+    }
+    setDraft({ type: "nda_template", nda_name: "", nda_text, is_default: items.length === 0 });
+  };
+
+  const save = async () => {
+    if (!draft.nda_name?.trim()) return toast.error("Please name the template");
+    if (!draft.nda_text?.trim()) return toast.error("Template text is empty");
+    try {
+      if (draft.id) await api.put(`/library/${draft.id}`, draft);
+      else await api.post("/library", draft);
+      setDraft(null);
+      await load();
+      toast.success("Saved");
+    } catch (e) { toast.error(e?.response?.data?.detail || "Failed"); }
+  };
+
+  const remove = async (id) => {
+    if (!window.confirm("Delete this NDA template?")) return;
+    try { await api.delete(`/library/${id}`); setItems(items.filter(i=>i.id!==id)); toast.success("Deleted"); }
+    catch { toast.error("Failed"); }
+  };
+
+  const setDefault = async (item) => {
+    try {
+      await api.put(`/library/${item.id}`, { ...item, is_default: true });
+      await load();
+      toast.success("Default template set");
+    } catch { toast.error("Failed"); }
+  };
+
+  return (
+    <div className="space-y-6" data-testid="nda-templates-tab">
+      <div className="flex items-end justify-between flex-wrap gap-3">
+        <div>
+          <div className="overline mb-2">Library</div>
+          <h2 className="font-display text-3xl tracking-tighter font-black">NDA Templates</h2>
+          <p className="text-sm text-zinc-600 mt-1 max-w-2xl">Per-user NDA templates used in the EOI → NDA → Full Details flow. The default template is sent automatically when sub-consultants are invited. Placeholders like <code className="font-mono text-xs">{"{{consultant_name}}"}</code>, <code className="font-mono text-xs">{"{{project_title}}"}</code>, <code className="font-mono text-xs">{"{{signing_date}}"}</code> will be replaced at sign time.</p>
+        </div>
+        <div className="flex gap-2">
+          <button onClick={()=>newDraft(false)} data-testid="add-nda-blank-btn"
+            className="flex items-center gap-2 px-4 py-3 border border-[#0A0A0B] text-xs font-semibold uppercase tracking-[0.15em] hover:bg-[#0A0A0B] hover:text-white transition-colors">
+            <Plus size={14} weight="bold"/> Blank
+          </button>
+          <button onClick={()=>newDraft(true)} data-testid="add-nda-prefill-btn"
+            className="flex items-center gap-2 px-4 py-3 bg-[#0A0A0B] text-white text-xs font-semibold uppercase tracking-[0.15em] hover:bg-[#0055FF] transition-colors">
+            <Plus size={14} weight="bold"/> Use built-in
+          </button>
+        </div>
+      </div>
+
+      {draft && (
+        <div className="border border-[#0A0A0B] p-6 space-y-4" data-testid="nda-template-form">
+          <Field label="Template name" testid="nda-name" value={draft.nda_name||""} onChange={v=>setDraft({...draft, nda_name: v})} placeholder="e.g. Standard mutual NDA — 2 years" />
+          <div>
+            <label className="overline block mb-2">Template text</label>
+            <textarea rows={18} value={draft.nda_text||""} onChange={e=>setDraft({...draft, nda_text: e.target.value})} data-testid="nda-text"
+              className="w-full px-3 py-3 border border-[#0A0A0B] text-xs font-mono leading-relaxed resize-y" />
+            <p className="text-[10px] uppercase tracking-[0.18em] text-zinc-500 mt-1">Available placeholders: {"{{owner_name}}"}, {"{{owner_email}}"}, {"{{consultant_name}}"}, {"{{consultant_company}}"}, {"{{consultant_email}}"}, {"{{project_title}}"}, {"{{client_name}}"}, {"{{discipline}}"}, {"{{signing_date}}"}, {"{{signing_ip}}"}.</p>
+          </div>
+          <label className="flex items-center gap-2 text-sm">
+            <input type="checkbox" checked={!!draft.is_default} onChange={e=>setDraft({...draft, is_default: e.target.checked})} data-testid="nda-is-default" />
+            <span>Use as my default NDA template</span>
+          </label>
+          <div className="flex gap-2 pt-2 border-t border-zinc-200">
+            <button onClick={save} data-testid="nda-save-btn" className="px-5 py-3 bg-[#0055FF] text-white text-xs font-semibold uppercase tracking-[0.15em] hover:bg-[#0A0A0B] transition-colors">Save</button>
+            <button onClick={()=>setDraft(null)} className="px-5 py-3 border border-[#0A0A0B] text-xs font-semibold uppercase tracking-[0.15em] hover:bg-zinc-100 transition-colors">Cancel</button>
+          </div>
+        </div>
+      )}
+
+      {loading ? (
+        <div className="text-zinc-500 font-mono text-sm">Loading…</div>
+      ) : items.length === 0 ? (
+        <div className="border border-dashed border-zinc-300 p-12 text-center text-sm text-zinc-500">
+          No custom NDA templates yet — the built-in mutual NDA will be used by default.
+        </div>
+      ) : (
+        <div className="border border-zinc-200">
+          {items.map((i, idx) => (
+            <div key={i.id} className={`p-5 grid grid-cols-1 lg:grid-cols-12 gap-4 items-start ${idx<items.length-1?'border-b border-zinc-200':''}`} data-testid={`nda-item-${i.id}`}>
+              <div className="lg:col-span-3">
+                <div className="overline mb-1">Name</div>
+                <div className="text-sm font-medium">{i.nda_name||"Untitled"}</div>
+              </div>
+              <div className="lg:col-span-7">
+                <div className="overline mb-1">Preview</div>
+                <div className="text-xs text-zinc-600 line-clamp-3 font-mono whitespace-pre-line">{(i.nda_text||"").slice(0, 320)}{(i.nda_text||"").length>320?"…":""}</div>
+              </div>
+              <div className="lg:col-span-1 flex flex-col gap-1">
+                {i.is_default
+                  ? <span className="text-[10px] uppercase tracking-[0.15em] font-mono px-2 py-0.5 bg-[#0055FF] text-white text-center" data-testid={`nda-default-${i.id}`}>Default</span>
+                  : <button onClick={()=>setDefault(i)} data-testid={`nda-set-default-${i.id}`} className="text-[10px] uppercase tracking-[0.15em] font-semibold px-2 py-0.5 border border-[#0A0A0B] hover:bg-[#0A0A0B] hover:text-white transition-colors">Make default</button>
+                }
+              </div>
+              <div className="lg:col-span-1 flex justify-end gap-1">
+                <button onClick={()=>setDraft(i)} data-testid={`edit-nda-${i.id}`} className="px-2 py-1 text-[10px] uppercase tracking-[0.15em] font-semibold border border-[#0A0A0B] hover:bg-[#0A0A0B] hover:text-white transition-colors">Edit</button>
+                <button onClick={()=>remove(i.id)} data-testid={`delete-nda-${i.id}`} className="p-1.5 border border-[#0A0A0B] hover:bg-[#FF3B30] hover:text-white hover:border-[#FF3B30] transition-colors">
+                  <Trash size={12} weight="bold"/>
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+};
 
 export default Settings;

@@ -12,7 +12,7 @@ from dotenv import load_dotenv
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
 
-from fastapi import FastAPI, APIRouter, HTTPException, Depends, UploadFile, File, Query
+from fastapi import FastAPI, APIRouter, HTTPException, Depends, UploadFile, File, Query, Request
 from fastapi.responses import FileResponse, Response, StreamingResponse
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
@@ -544,11 +544,15 @@ class LibraryItemIn(BaseModel):
     cost_rate: Optional[float] = 0.0
     rate_currency: Optional[str] = "USD"
     active: Optional[bool] = True
+    # nda_template fields
+    nda_name: Optional[str] = ""
+    nda_text: Optional[str] = ""
+    is_default: Optional[bool] = False
 
 
 @api.get("/library")
 async def list_library(type: str = Query(...), user=Depends(get_current_user)):
-    if type not in ("requirement", "fee_template", "contact", "staff"):
+    if type not in ("requirement", "fee_template", "contact", "staff", "nda_template"):
         raise HTTPException(400, "Invalid type")
     cursor = db.library.find({"owner_id": user["id"], "type": type}, {"_id": 0}).sort("created_at", -1)
     return await cursor.to_list(2000)
@@ -558,6 +562,8 @@ async def list_library(type: str = Query(...), user=Depends(get_current_user)):
 async def create_library_item(body: LibraryItemIn, user=Depends(get_current_user)):
     item = {"id": new_id(), "owner_id": user["id"], "created_at": now(), **body.model_dump()}
     await db.library.insert_one(item)
+    if body.type == "nda_template" and body.is_default:
+        await db.settings.update_one({"user_id": user["id"]}, {"$set": {"default_nda_id": item["id"]}}, upsert=True)
     return clean_doc(item)
 
 
@@ -569,6 +575,8 @@ async def update_library_item(item_id: str, body: LibraryItemIn, user=Depends(ge
     )
     if res.matched_count == 0:
         raise HTTPException(404, "Item not found")
+    if body.type == "nda_template" and body.is_default:
+        await db.settings.update_one({"user_id": user["id"]}, {"$set": {"default_nda_id": item_id}}, upsert=True)
     return await db.library.find_one({"id": item_id}, {"_id": 0})
 
 
@@ -738,6 +746,72 @@ async def remove_invite(project_id: str, invite_id: str, user=Depends(get_curren
     return {"ok": True}
 
 
+class InvitePatchIn(BaseModel):
+    skip_nda: Optional[bool] = None
+    anonymise_client: Optional[bool] = None
+    notes: Optional[str] = None
+
+
+@api.patch("/projects/{project_id}/invites/{invite_id}")
+async def patch_invite(project_id: str, invite_id: str, body: InvitePatchIn, user=Depends(get_current_user)):
+    p = await db.projects.find_one({"id": project_id, "owner_id": user["id"]})
+    if not p:
+        raise HTTPException(404, "Project not found")
+    upd: Dict[str, Any] = {}
+    for k in ("skip_nda", "anonymise_client", "notes"):
+        v = getattr(body, k)
+        if v is not None:
+            upd[k] = v
+    if not upd:
+        raise HTTPException(400, "Nothing to update")
+    res = await db.invites.update_one({"id": invite_id, "project_id": project_id}, {"$set": upd})
+    if res.matched_count == 0:
+        raise HTTPException(404, "Invite not found")
+    return await db.invites.find_one({"id": invite_id}, {"_id": 0})
+
+
+async def _notify_owner(invite: Dict[str, Any], event: str, extra: str = "") -> None:
+    """Best-effort SMTP notification to the project owner. Silent on failure."""
+    try:
+        proj = await db.projects.find_one({"id": invite["project_id"]}, {"_id": 0})
+        if not proj:
+            return
+        owner = await db.users.find_one({"id": proj["owner_id"]}, {"_id": 0})
+        if not owner:
+            return
+        s = await _get_settings(proj["owner_id"])
+        if not s.get("smtp_host"):
+            return
+        labels = {
+            "eoi_viewed": "viewed the EOI",
+            "interested": "expressed interest",
+            "declined": "declined the invitation",
+            "nda_signed": "signed the NDA",
+            "responded": "submitted a fee response",
+        }
+        verb = labels.get(event, event)
+        subject = f"[RFP/Analyser] {invite.get('consultant_name','Sub-consultant')} {verb} — {proj.get('title','')}"
+        body_text = (
+            f"Hi {owner.get('name','')},\n\n"
+            f"{invite.get('consultant_name','A sub-consultant')} ({invite.get('consultant_email','')}) "
+            f"{verb} for the {invite.get('discipline','')} discipline on project '{proj.get('title','')}'.\n"
+            f"{extra}\n\n"
+            f"Open project: {os.environ.get('PUBLIC_BASE_URL','')}/projects/{invite['project_id']}\n"
+        )
+        await send_smtp(
+            host=s["smtp_host"], port=s.get("smtp_port") or 587,
+            username=s.get("smtp_username") or "",
+            password=s.get("smtp_password") or "",
+            use_tls=bool(s.get("smtp_use_tls", True)),
+            from_name=s.get("smtp_from_name") or "RFP Analyser",
+            from_email=s.get("smtp_from_email") or s.get("smtp_username", ""),
+            to_email=owner["email"],
+            subject=subject, body_text=body_text,
+        )
+    except Exception as e:
+        logger.info("owner notification skipped: %s", e)
+
+
 DEFAULT_NDA_TEMPLATE = """NON-DISCLOSURE AGREEMENT
 
 This Non-Disclosure Agreement (the "Agreement") is entered into on {{signing_date}}
@@ -802,6 +876,12 @@ def _render_nda(template: str, ctx: Dict[str, Any]) -> str:
     return out
 
 
+@api.get("/library/nda/builtin")
+async def get_builtin_nda(_=Depends(get_current_user)):
+    """Returns the built-in mutual NDA template text for use as a starting point."""
+    return {"nda_text": DEFAULT_NDA_TEMPLATE}
+
+
 @api.get("/public/invites/{token}/eoi")
 async def public_get_eoi(token: str):
     inv = await db.invites.find_one({"share_token": token}, {"_id": 0})
@@ -815,9 +895,14 @@ async def public_get_eoi(token: str):
     upd = {}
     if not inv.get("eoi_viewed_at"):
         upd["eoi_viewed_at"] = now()
+        if inv.get("status") == "sent":
+            upd["status"] = "viewed"
     if upd:
         await db.invites.update_one({"share_token": token}, {"$set": upd})
         inv.update(upd)
+        if upd.get("eoi_viewed_at"):
+            import asyncio as _asyncio
+            _asyncio.create_task(_notify_owner(inv, "eoi_viewed"))
     summary = ""
     submission_date = None
     if proj and proj.get("analysis"):
@@ -859,11 +944,18 @@ async def public_interest(token: str, body: InterestIn):
     if not inv:
         raise HTTPException(404, "Invite not found")
     upd: Dict[str, Any] = {}
+    event = "interested"
+    extra = ""
     if body.interested:
         upd = {"interested_at": now(), "status": "interested"}
     else:
         upd = {"declined_at": now(), "decline_reason": body.reason or "", "status": "declined", "decline_stage": "eoi"}
+        event = "declined"
+        extra = f"Stage: EOI. Reason: {body.reason or 'not provided'}"
     await db.invites.update_one({"share_token": token}, {"$set": upd})
+    merged = {**inv, **upd}
+    import asyncio as _asyncio
+    _asyncio.create_task(_notify_owner(merged, event, extra))
     return {"ok": True}
 
 
@@ -948,6 +1040,9 @@ async def public_sign_nda(request: Request, token: str, body: NDASignIn):
         "status": "nda_signed",
     }
     await db.invites.update_one({"share_token": token}, {"$set": upd})
+    merged = {**inv, **upd}
+    import asyncio as _asyncio
+    _asyncio.create_task(_notify_owner(merged, "nda_signed"))
     return {"ok": True}
 
 
@@ -1007,34 +1102,38 @@ def _nda_pdf(invite: Dict[str, Any]) -> bytes:
     return buf.getvalue()
 
 
-# Restrict the existing /public/invites/{token} so full details only flow after NDA signed (or skip_nda)
-async def _ensure_full_access(invite: Dict[str, Any]) -> None:
+# Restrict full RFP details so they only flow after NDA is signed (or skip_nda)
+def _require_full_access(invite: Dict[str, Any]) -> None:
     if invite.get("skip_nda"):
         return
     if invite.get("nda_signed_at"):
         return
     raise HTTPException(403, "NDA not yet signed")
+
+
+@api.get("/public/invites/{token}/details")
+async def public_get_details(token: str):
+    """Full RFP details for the sub-consultant — only accessible after NDA signed (or skip_nda)."""
     inv = await db.invites.find_one({"share_token": token}, {"_id": 0})
     if not inv:
         raise HTTPException(404, "Invite not found")
+    _require_full_access(inv)
     proj = await db.projects.find_one(
         {"id": inv["project_id"]},
         {"_id": 0, "title": 1, "client_name": 1, "description": 1, "analysis": 1}
     )
-    if inv["status"] == "sent":
-        await db.invites.update_one({"share_token": token}, {"$set": {"status": "viewed"}})
-        inv["status"] = "viewed"
-    # Slim analysis for sub-consultant: only their discipline + relevant project context
+    if inv.get("status") in (None, "sent", "viewed", "interested", "nda_signed"):
+        await db.invites.update_one({"share_token": token}, {"$set": {"status": "viewing_details"}})
     discipline_section = None
     if proj and proj.get("analysis"):
         analysis = proj["analysis"]
         for d in (analysis.get("disciplines") or []):
-            if (d.get("name") or "").lower() == inv["discipline"].lower():
+            if (d.get("name") or "").lower() == (inv.get("discipline") or "").lower():
                 discipline_section = d
                 break
         proj_view = {
             "title": proj.get("title"),
-            "client_name": proj.get("client_name"),
+            "client_name": "Confidential client" if inv.get("anonymise_client") else proj.get("client_name"),
             "summary": analysis.get("summary", ""),
             "project_objectives": analysis.get("project_objectives", ""),
             "scope": analysis.get("scope", []),
@@ -1048,7 +1147,7 @@ async def _ensure_full_access(invite: Dict[str, Any]) -> None:
     else:
         proj_view = {
             "title": proj.get("title") if proj else "",
-            "client_name": proj.get("client_name") if proj else "",
+            "client_name": "Confidential client" if inv.get("anonymise_client") else (proj.get("client_name") if proj else ""),
             "summary": "", "project_objectives": "", "scope": [], "key_dates": [],
             "deliverables": [], "technical_specifications": [],
             "financial_terms": {}, "submission_guidelines": {},
@@ -1062,6 +1161,7 @@ async def public_respond(token: str, body: InviteResponseIn):
     inv = await db.invites.find_one({"share_token": token})
     if not inv:
         raise HTTPException(404, "Invite not found")
+    _require_full_access(inv)
     update = {
         "fee": body.fee,
         "currency": body.currency,
@@ -1070,7 +1170,15 @@ async def public_respond(token: str, body: InviteResponseIn):
         "status": "submitted" if body.status == "submitted" else "declined",
         "responded_at": now(),
     }
+    if body.status != "submitted" and not inv.get("decline_stage"):
+        update["decline_stage"] = "details"
+        update["declined_at"] = now()
     await db.invites.update_one({"share_token": token}, {"$set": update})
+    merged = {**inv, **update}
+    import asyncio as _asyncio
+    event = "responded" if body.status == "submitted" else "declined"
+    extra = f"Fee: {body.currency} {body.fee:,.2f}" if body.status == "submitted" else f"Stage: full details. Notes: {body.notes or '—'}"
+    _asyncio.create_task(_notify_owner(merged, event, extra))
     return {"ok": True}
 
 
