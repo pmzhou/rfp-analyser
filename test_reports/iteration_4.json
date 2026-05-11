@@ -1,0 +1,49 @@
+{
+  "summary": "Re-test after main agent's fix for the CRITICAL partial-PUT clobber and the MEDIUM typology-dropdown shrinkage. Backend: 11/11 fee_methods pytest now green (previously 10/11) — test_partial_put_fee_only_preserves_smtp_llm and test_partial_put_smtp_only_preserves_fee_fields both pass. Full EOI/NDA regression suite 29/29 green. Frontend: live integration test confirms (a) Preferences currency=USD survives Fee Methods Save; (b) seeded smtp_host/smtp_port=2525/llm_provider=openai/llm_model=gpt-4o-mini all survive a Fee Methods Save (no clobber); (c) UI Preferences tab still shows USD after switching back; (d) Fee Builder → 07 · Fee Methods page typology dropdown shows all 12 baked-in typologies merged with user settings. The two reported issues are RESOLVED.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {
+        "endpoint": "PUT /api/settings",
+        "issue": "Still no gt=0 constraint on fee_overhead_multiplier / fee_target_margin_pct (P2 hardening, out of scope per main agent)."
+      },
+      {
+        "endpoint": "PUT /api/settings",
+        "issue": "fee_phase_preset still accepts any free-form string (no Literal enum) (P2 hardening, out of scope per main agent)."
+      }
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {
+        "screen": "FeeBuilder → FeeMethodsPage (07)",
+        "issues": ["Pre-existing React hydration warning: `<span>` cannot be a child of `<option>` — caused by Emergent x-ve-dynamic instrumentation. Cosmetic; documented in iteration_3."]
+      }
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_fee_methods_settings.py",
+    "/app/backend/tests/test_eoi_nda_flow.py",
+    "/app/test_reports/pytest/fee_methods_results.xml",
+    "/app/test_reports/pytest/eoi_nda_results.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "server.py put_settings now correctly uses body.model_dump(exclude_unset=True); secret fields (smtp_password, llm_api_key) are handled separately. Logic verified to preserve existing-but-not-sent secrets on partial PUT.",
+    "FeeBuilder.jsx line 659 merges DEFAULT_BENCHMARK_TYPOLOGY first, then user settings — correct precedence so user overrides win on conflicts while defaults always provide the full 12 set.",
+    "server.py is still ~1252 lines and FeeBuilder.jsx ~870 lines; module-splitting still recommended for maintainability (deferred from iteration_3, not in this fix scope)."
+  ],
+  "updated_files": [],
+  "success_rate": {
+    "backend": "100% (11/11 fee_methods + 29/29 eoi_nda = 40/40 pytest)",
+    "frontend": "100% on the two targeted flows (cross-tab preservation + typology dropdown size)"
+  },
+  "test_credentials": "demo@rfpqa.example.com / DemoPass123! (UI). Pytest suite signs up fresh users per run.",
+  "seed_data_creation": "Test wrote SMTP host=smtp.example.com / port=2525 / llm_provider=openai / llm_model=gpt-4o-mini / default_currency=USD / fee_phase_preset=aia / fee_overhead_multiplier=3.1 onto demo user's settings doc via UI + direct API to construct the regression scenario. Single per-user settings doc, harmless for downstream tests.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Both reported issues (CRITICAL partial-PUT clobber + MEDIUM typology shrinkage) are FIXED and verified end-to-end. Two minor P2 backend validation gaps remain (fee_overhead gt=0 + fee_phase_preset Literal enum) but main agent explicitly excluded these from scope. The Emergent `<span>` in `<option>` hydration warning persists but is purely cosmetic dev-console noise from x-ve-dynamic instrumentation, not from app code.",
+  "rca of the issue": "Original clobber RCA from iteration_3 was correct. Fix at /app/backend/server.py lines 480-502 now: (1) calls body.model_dump(exclude_unset=True) so only explicitly-sent JSON keys are written; (2) iterates `sent` dict skipping secrets; (3) handles smtp_password/llm_api_key separately — not-sent => keep existing ciphertext; '' => clear; other => re-encrypt and store. Verified via direct API trace: PUT {fee_phase_preset:'aia',fee_overhead_multiplier:3.1} no longer mutates default_currency / smtp_* / llm_*. Frontend FeeBuilder typology merge at line 659 ({...DEFAULT_BENCHMARK_TYPOLOGY, ...(settings?.fee_benchmark_by_typology || {})}) guarantees 12-minimum dropdown even when user has deleted typologies in Settings."
+}

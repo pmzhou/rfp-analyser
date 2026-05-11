@@ -655,8 +655,8 @@ const FeeMethodsPage = ({ fb, setFb, totals, settings, fmt }) => {
   const cc = totals.constructionCost;
   const bottomUp = totals.feeExVat;
 
-  // Defaults from settings, fallback to baked-in
-  const benchmarks = (settings?.fee_benchmark_by_typology) || DEFAULT_BENCHMARK_TYPOLOGY;
+  // Defaults from settings, fallback to baked-in (always merge so deletions in Settings don't shrink dropdown)
+  const benchmarks = { ...DEFAULT_BENCHMARK_TYPOLOGY, ...(settings?.fee_benchmark_by_typology || {}) };
   const slabs = (settings?.fee_sliding_scale && settings.fee_sliding_scale.length) ? settings.fee_sliding_scale : DEFAULT_SLIDING_SCALE;
   const factorsDef = (settings?.fee_complexity_factors && settings.fee_complexity_factors.length) ? settings.fee_complexity_factors : DEFAULT_COMPLEXITY_FACTORS;
   const presetId = fb.methods?.phase_preset || settings?.fee_phase_preset || "traditional";

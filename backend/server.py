@@ -481,25 +481,23 @@ async def get_settings(user=Depends(get_current_user)):
 async def put_settings(body: SettingsIn, user=Depends(get_current_user)):
     existing = await db.settings.find_one({"user_id": user["id"]}) or {}
     upd: Dict[str, Any] = {"user_id": user["id"], "updated_at": now()}
-    # plain fields
-    for k in ("default_currency","date_format",
-              "smtp_host","smtp_port","smtp_username","smtp_use_tls","smtp_from_name","smtp_from_email",
-              "llm_provider","llm_model","llm_base_url",
-              "fee_benchmark_by_typology","fee_phase_preset","fee_phase_distribution",
-              "fee_overhead_multiplier","fee_target_margin_pct","fee_lock_to_signing_budget",
-              "fee_sliding_scale","fee_complexity_factors"):
-        v = getattr(body, k)
-        if v is not None:
-            upd[k] = v
-    # secret fields: None -> keep existing; "" -> clear; other -> encrypt + store
-    for k in ("smtp_password","llm_api_key"):
-        v = getattr(body, k)
-        if v is None:
-            if k in existing: upd[k] = existing[k]
-        elif v == "":
-            upd[k] = ""
+    # Only persist fields the caller explicitly sent (true partial update).
+    sent = body.model_dump(exclude_unset=True)
+    for k, v in sent.items():
+        if k in ("smtp_password", "llm_api_key"):
+            continue   # handled below
+        upd[k] = v
+    # secret fields: not sent -> keep existing; "" -> clear; other -> encrypt + store
+    for k in ("smtp_password", "llm_api_key"):
+        if k not in sent:
+            if k in existing:
+                upd[k] = existing[k]
         else:
-            upd[k] = encrypt(v)
+            v = sent[k]
+            if v is None or v == "":
+                upd[k] = ""
+            else:
+                upd[k] = encrypt(v)
     await db.settings.update_one({"user_id": user["id"]}, {"$set": upd}, upsert=True)
     return _public_settings(await db.settings.find_one({"user_id": user["id"]}))
 
