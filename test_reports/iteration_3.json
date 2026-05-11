@@ -1,0 +1,84 @@
+{
+  "summary": "Regression for Fee Methods feature (new Fee Builder tab + Settings → Fee Methods tab + 7 new fee_* SettingsIn fields). Backend: 10/11 pytest pass — 1 CRITICAL partial-PUT clobber bug found. Frontend: Settings Fee Methods tab renders and saves (toast confirmed). Fee Builder → '07 · Fee Methods' page renders fully (4 method rows, recommended-fee card, phase distribution table, complexity factor toggles, override input). Auto-save persists state. The clobber bug was also reproduced live via the UI (saving Fee Methods reset user's default_currency from USD back to AED).",
+  "backend_issues": {
+    "critical": [
+      {
+        "endpoint": "PUT /api/settings",
+        "issue": "Partial PUT clobbers any field on SettingsIn that has a non-None Pydantic default. Concretely, sending only fee_* fields (as the Settings → Fee Methods Save flow does) resets default_currency→'AED', date_format→'dd/mm/yyyy', smtp_port→587, smtp_use_tls→True, llm_provider→'anthropic', llm_model→'claude-sonnet-4-5-20250929' for the calling user. Root cause: SettingsIn.default_currency = 'AED' (etc.) means Pydantic fills the default when the client omits it, and put_settings then writes 'if v is not None: upd[k] = v', overwriting existing values. Symptoms reproduced live: user set currency to USD on Preferences tab, clicked Save on Fee Methods tab, currency reverted to AED.",
+        "priority": "CRITICAL"
+      }
+    ],
+    "minor": [
+      {
+        "endpoint": "PUT /api/settings",
+        "issue": "fee_overhead_multiplier validation: passing a non-numeric string yields 422 (good), but passing 0 or negative is accepted (no >0 constraint). Consider Field(gt=0, le=10)."
+      },
+      {
+        "endpoint": "PUT /api/settings",
+        "issue": "fee_phase_preset accepts any string (no enum). Frontend assumes 'traditional|bim_led|aia|riba|custom'; backend would accept any free-form value."
+      }
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {
+        "component": "Settings → Fee Methods (FeeMethodsDefaultsTab)",
+        "issue": "Save handler triggers the CRITICAL backend clobber bug above. Same root cause; needs backend fix OR frontend should GET current settings and PUT the full merged payload.",
+        "selector": "[data-testid=\"fee-methods-save\"]",
+        "priority": "CRITICAL"
+      },
+      {
+        "component": "FeeBuilder → FeeMethodsPage typology dropdown",
+        "issue": "Dropdown options are derived from settings.fee_benchmark_by_typology keys. If user previously saved a benchmark map with only 3 typologies (as demo user has), the project-side typology list is permanently capped at those 3 — review-spec '12 typologies by default' only holds for users who have never saved. Consider always merging DEFAULT_BENCHMARK_TYPOLOGY ∪ user.fee_benchmark_by_typology when rendering the typology select on the Fee Builder page so deletions in Settings don't shrink project choices.",
+        "selector": "[data-testid=\"methods-typology\"]",
+        "priority": "MEDIUM"
+      }
+    ],
+    "integration_issues": [
+      {
+        "flow": "Settings Fee Methods → Fee Builder benchmark % flow",
+        "issue": "Could not fully verify spec point 'change typology to Healthcare/Lab → benchmark 13.5' end-to-end because the demo user's typology key is literally 'Healthcare / Lab' (with spaces and slash) and select_option for 'healthcare' fails; key normalisation is inconsistent between DEFAULT_BENCHMARK_TYPOLOGY (lowercase 'healthcare') and what the Settings UI displays/saves (literal user-typed key). When saving from Settings the keys can be any casing/format, so the Fee Builder lookup by 'typology' value relies on exact string match.",
+        "affected_selectors": ["[data-testid=\"methods-typology\"]", "[data-testid=\"methods-benchmark-pct\"]"]
+      }
+    ],
+    "design_issues": [
+      {
+        "screen": "FeeBuilder → FeeMethodsPage",
+        "issues": [
+          "React hydration warning in console: `<span>` cannot be a child of `<option>` — caused by Emergent x-ve-dynamic instrumentation wrapping option content. Visible only in dev console, not user-facing, but pollutes logs and may break SSR if ever enabled."
+        ]
+      }
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_fee_methods_settings.py",
+    "/app/test_reports/pytest/fee_methods_results.xml"
+  ],
+  "action_items": [
+    "FIX (CRITICAL): SettingsIn partial PUT clobber. Best fix: change SettingsIn fields with defaults ('AED','dd/mm/yyyy',587,True,'anthropic','claude-sonnet-4-5-20250929',2.85,20.0,False,'traditional') to default=None and use model_dump(exclude_unset=True) in put_settings so only explicitly-sent fields are written. Alternative: use Body() with exclude_unset on a dict payload.",
+    "Add Literal/enum validation for fee_phase_preset and gt=0 constraint on fee_overhead_multiplier/fee_target_margin_pct.",
+    "Normalise typology keys (lowercase, slug) on save in Settings → Fee Methods so Fee Builder dropdown values match consistently.",
+    "Merge DEFAULT_BENCHMARK_TYPOLOGY with user-saved typologies on the Fee Builder Fee Methods page so the dropdown always offers the full 12 standard typologies.",
+    "Investigate Emergent's `<span>` inside `<option>` instrumentation triggering React hydration warnings."
+  ],
+  "critical_code_review_comments": [
+    "server.py: put_settings 'if v is not None: upd[k] = v' is incorrect because Pydantic auto-fills defaults — switch to body.model_dump(exclude_unset=True) for true partial updates.",
+    "server.py is now ~1252 lines — well past the 700-line guideline; split settings/library/fee_methods into routers.",
+    "FeeBuilder.jsx FeeMethodsPage is ~250+ lines and embedded in a 900+ line file — consider extracting to its own component file.",
+    "Frontend Settings Fee Methods Save does not GET-merge before PUT, relying on backend to do correct partial update which it currently doesn't.",
+    "No backend validation that fee_sliding_scale slabs are monotonically increasing by limit; downstream slidingScaleFee assumes ordering."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_fee_methods_settings.py (new — 11 tests)"
+  ],
+  "success_rate": {
+    "backend": "91% (10/11 — 1 critical clobber failure intentional, demonstrates bug)",
+    "frontend": "90% (Settings Fee Methods tab + Fee Builder Fee Methods page both render + save; clobber-side-effect breaks cross-tab integration)"
+  },
+  "test_credentials": "demo@rfpqa.example.com / DemoPass123! used for UI; backend tests create feem_<rand>@rfpqa.example.com per run.",
+  "seed_data_creation": "Backend test signs up one user and writes ~1 settings doc. No cleanup of the test settings doc (settings is per-user singleton; harmless).",
+  "retest_needed": true,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "After main agent applies the SettingsIn partial-update fix (switch to model_dump(exclude_unset=True) and/or change defaults to None), re-run pytest /app/backend/tests/test_fee_methods_settings.py — the failing test test_partial_put_fee_only_preserves_smtp_llm should turn green. Also re-test UI flow: set Preferences currency=USD, save; then go to Fee Methods tab, save; return to Preferences — currency must remain USD. Other regression files /app/backend/tests/test_rfp_backend.py and /app/backend/tests/test_eoi_nda_flow.py remain valid (though test_rfp_backend.py has 2 stale endpoints per iteration_2.json).",
+  "rca of the issue": "SettingsIn fields like `default_currency: Optional[str] = 'AED'` have a NON-None default. When the frontend sends a partial PUT body lacking those keys, Pydantic instantiates the model and SETS those defaults. The put_settings handler then iterates fields with `if v is not None: upd[k] = v` — this is True for the auto-filled defaults — and writes them to Mongo, overwriting any prior user value. Reproduction: (1) PUT /api/settings { default_currency:'USD' }; (2) PUT /api/settings { fee_phase_preset:'traditional' }; (3) GET /api/settings → default_currency is 'AED'. Mitigation: change put_settings to `upd.update(body.model_dump(exclude_unset=True, exclude={'smtp_password','llm_api_key'}))` and handle the two secret fields separately; OR change every default in SettingsIn to None and let frontend explicitly send what it wants persisted."
+}

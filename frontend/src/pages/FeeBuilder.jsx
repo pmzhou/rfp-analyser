@@ -4,7 +4,7 @@ import { toast } from "sonner";
 import { usePrefs } from "@/contexts/PrefsContext";
 import {
   Buildings, ListChecks, IdentificationCard, Users, Toolbox, ChartBar,
-  FileText as FileTextIcon, Plus, Trash, Calendar, FloppyDisk, Power
+  FileText as FileTextIcon, Plus, Trash, Calendar, FloppyDisk, Power, Calculator
 } from "@phosphor-icons/react";
 
 /* ------------ defaults ------------ */
@@ -52,7 +52,8 @@ const PAGES = [
   { id: "team",     label: "04 · Team Resourcing", icon: Users },
   { id: "subs",     label: "05 · Sub-Consultants", icon: Toolbox },
   { id: "combined", label: "06 · Combined Fee", icon: ChartBar },
-  { id: "summary",  label: "07 · Summary", icon: FileTextIcon },
+  { id: "methods",  label: "07 · Fee Methods", icon: Calculator },
+  { id: "summary",  label: "08 · Summary", icon: FileTextIcon },
 ];
 
 /* ------------ component ------------ */
@@ -69,12 +70,14 @@ const FeeBuilder = ({ project, onUpdate }) => {
   const [saving, setSaving] = useState(false);
   const [globalStaff, setGlobalStaff] = useState([]);
   const [globalSubs, setGlobalSubs] = useState([]);
+  const [settings, setSettings] = useState(null);
   const debounceRef = useRef();
 
-  // load global staff & contacts
+  // load global staff, contacts, and user settings
   useEffect(() => {
     api.get("/library?type=staff").then(r => setGlobalStaff(r.data)).catch(() => {});
     api.get("/library?type=contact").then(r => setGlobalSubs(r.data)).catch(() => {});
+    api.get("/settings").then(r => setSettings(r.data)).catch(() => {});
   }, []);
 
   // pre-fill from project + analysis
@@ -193,6 +196,7 @@ const FeeBuilder = ({ project, onUpdate }) => {
       {page === "team"     && <TeamPage fb={fb} setFb={setFb} stages={allStages} fmt={fmt} />}
       {page === "subs"     && <SubsPage fb={fb} setFb={setFb} stages={allStages} globalSubs={globalSubs} fmt={fmt} />}
       {page === "combined" && <CombinedPage fb={fb} setMul={setMul} totals={totals} stages={allStages} fmt={fmt} />}
+      {page === "methods"  && <FeeMethodsPage fb={fb} setFb={setFb} totals={totals} settings={settings} fmt={fmt} />}
       {page === "summary"  && <SummaryPage fb={fb} project={project} totals={totals} score={matrixScore} fmt={fmt} />}
     </div>
   );
@@ -592,7 +596,242 @@ const Row = ({ label, value, bold, big, highlight }) => (
   </div>
 );
 
-/* ------------ Page 07 Summary ------------ */
+/* ------------ Page 07 Fee Methods ------------ */
+const PHASE_PRESETS = {
+  traditional: { name: "Traditional", dist: { SD: 17, DD: 18, CD: 40, Tender: 5, CA: 20 } },
+  bim_led:     { name: "BIM-led",     dist: { SD: 22, DD: 22, CD: 30, Tender: 4, CA: 22 } },
+  riba:        { name: "RIBA Plan of Work 2020", dist: { "0–1 Strategic": 5, "2 Concept": 15, "3 Spatial": 15, "4 Technical": 35, "5 Manufacturing": 5, "6 Handover": 5, "7 In Use": 20 } },
+  aia:         { name: "AIA B101",    dist: { SD: 15, DD: 20, CD: 40, Tender: 5, CA: 20 } },
+};
+
+const DEFAULT_BENCHMARK_TYPOLOGY = {
+  "Residential":         10.0,
+  "Healthcare / Lab":    12.0,
+  "Commercial / Office":  8.0,
+  "Hospitality / F&B":    9.0,
+  "Retail":               8.0,
+  "Education":           10.0,
+  "Industrial":           7.0,
+  "Civil / Infra":        6.0,
+  "Heritage / Refurb":   13.0,
+  "High-rise":           10.0,
+  "Mixed-use":            9.0,
+  "Other":                9.0,
+};
+
+const DEFAULT_SLIDING_SCALE = [
+  { limit: 10_000_000,  pct: 8.0 },
+  { limit: 30_000_000,  pct: 6.5 },
+  { limit: 80_000_000,  pct: 5.0 },
+  { limit: 999_999_999, pct: 3.5 },
+];
+
+const DEFAULT_COMPLEXITY_FACTORS = [
+  { name: "Healthcare / Laboratory",   pct: 40, on: false },
+  { name: "Heritage / Refurbishment",  pct: 30, on: false },
+  { name: "BIM LOD 400+",              pct: 15, on: false },
+  { name: "Phased / Live-site",        pct: 20, on: false },
+  { name: "LEED Gold",                 pct:  3, on: false },
+  { name: "LEED Platinum",             pct:  5, on: false },
+  { name: "Commissioning included",    pct:  5, on: false },
+];
+
+const slidingScaleFee = (cc, slabs) => {
+  let remaining = Math.max(0, Number(cc) || 0);
+  let prev = 0;
+  let total = 0;
+  for (const slab of slabs) {
+    const slabSize = Math.max(0, slab.limit - prev);
+    const take = Math.min(remaining, slabSize);
+    total += take * (Number(slab.pct || 0) / 100);
+    remaining -= take;
+    prev = slab.limit;
+    if (remaining <= 0) break;
+  }
+  return total;
+};
+
+const FeeMethodsPage = ({ fb, setFb, totals, settings, fmt }) => {
+  const cc = totals.constructionCost;
+  const bottomUp = totals.feeExVat;
+
+  // Defaults from settings, fallback to baked-in
+  const benchmarks = (settings?.fee_benchmark_by_typology) || DEFAULT_BENCHMARK_TYPOLOGY;
+  const slabs = (settings?.fee_sliding_scale && settings.fee_sliding_scale.length) ? settings.fee_sliding_scale : DEFAULT_SLIDING_SCALE;
+  const factorsDef = (settings?.fee_complexity_factors && settings.fee_complexity_factors.length) ? settings.fee_complexity_factors : DEFAULT_COMPLEXITY_FACTORS;
+  const presetId = fb.methods?.phase_preset || settings?.fee_phase_preset || "traditional";
+
+  // Project-level overrides held inside fb.methods
+  const m = fb.methods || {};
+  const typology = m.typology || fb.details.typology || "Other";
+  const matchedPct = benchmarks[typology] ?? benchmarks["Other"] ?? 9;
+  const benchmarkPct = m.benchmark_pct != null ? Number(m.benchmark_pct) : matchedPct;
+  const factors = m.factors || factorsDef;
+  const recommendedMethod = m.recommended_method || "bottom_up";
+
+  // Method calculations
+  const pctFee = cc * (benchmarkPct / 100);
+  const slabFee = slidingScaleFee(cc, slabs);
+  const complexityBonus = factors.filter(f => f.on).reduce((s, f) => s + Number(f.pct || 0), 0);
+  const adjustedFee = pctFee * (1 + complexityBonus / 100);
+
+  const methodMap = {
+    bottom_up:   { label: "A · Bottom-up build-up",   value: bottomUp,   desc: `Hours × rate + sub-fees from Combined Fee` },
+    pct_of_cc:   { label: "B · % of Construction Cost", value: pctFee,    desc: `${benchmarkPct.toFixed(2)}% × ${fmt(cc)}` },
+    sliding:     { label: "C · Sliding-scale (slabs)",  value: slabFee,   desc: `Slab-bracketed % over ${fmt(cc)}` },
+    adjusted:    { label: "D · Benchmark + complexity", value: adjustedFee, desc: `B + ${complexityBonus.toFixed(0)}% complexity uplift` },
+  };
+
+  const chosenFee = methodMap[recommendedMethod]?.value ?? bottomUp;
+  const phaseDist = PHASE_PRESETS[presetId]?.dist || PHASE_PRESETS.traditional.dist;
+  const phaseTotal = Object.values(phaseDist).reduce((s,n)=>s+Number(n||0),0);
+
+  const setM = (patch) => setFb({ ...fb, methods: { ...m, ...patch } });
+  const setFactor = (idx, on) => {
+    const next = factors.map((f, i) => i === idx ? { ...f, on } : f);
+    setM({ factors: next });
+  };
+
+  return (
+    <div className="space-y-8" data-testid="fee-methods-page">
+      {/* Top: typology + benchmark % */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <div>
+          <label className="overline block mb-2">Typology</label>
+          <select value={typology} onChange={e=>setM({ typology: e.target.value, benchmark_pct: null })}
+            data-testid="methods-typology"
+            className="w-full px-3 py-3 border border-[#0A0A0B] text-sm bg-white">
+            {Object.keys(benchmarks).map(t => <option key={t} value={t}>{t} ({benchmarks[t]}%)</option>)}
+          </select>
+        </div>
+        <div>
+          <label className="overline block mb-2">Benchmark % of CC</label>
+          <input type="number" step="0.1" value={benchmarkPct}
+            onChange={e=>setM({ benchmark_pct: parseFloat(e.target.value)||0 })}
+            data-testid="methods-benchmark-pct"
+            className="w-full px-3 py-3 border border-[#0A0A0B] text-sm font-mono" />
+          <p className="text-[10px] uppercase tracking-[0.18em] text-zinc-500 mt-1">Defaults to typology benchmark. Override per project.</p>
+        </div>
+        <div>
+          <label className="overline block mb-2">Construction cost</label>
+          <div className="px-3 py-3 border border-zinc-200 bg-zinc-50 text-sm font-mono">{fmt(cc)}</div>
+          <p className="text-[10px] uppercase tracking-[0.18em] text-zinc-500 mt-1">From GFA × Cost/m² on page 01.</p>
+        </div>
+      </div>
+
+      {/* Complexity factors */}
+      <div>
+        <div className="overline mb-3">Complexity / Adjustment Factors</div>
+        <div className="border border-zinc-200 grid grid-cols-1 md:grid-cols-2">
+          {factors.map((f, i) => (
+            <label key={i} className="flex items-center justify-between gap-3 p-4 border-b border-r border-zinc-200" data-testid={`methods-factor-${i}`}>
+              <span className="text-sm">{f.name}</span>
+              <span className="flex items-center gap-3">
+                <span className="font-mono text-xs text-zinc-500">+{Number(f.pct||0).toFixed(0)}%</span>
+                <input type="checkbox" checked={!!f.on} onChange={e=>setFactor(i, e.target.checked)} />
+              </span>
+            </label>
+          ))}
+        </div>
+        <p className="text-[10px] uppercase tracking-[0.18em] text-zinc-500 mt-2">Active factors: <span className="font-mono">+{complexityBonus.toFixed(0)}%</span> uplift applied only to Method D.</p>
+      </div>
+
+      {/* Method comparison */}
+      <div>
+        <div className="overline mb-3">Method comparison</div>
+        <table className="w-full border border-zinc-200" data-testid="methods-comparison-table">
+          <thead className="bg-zinc-50 text-[10px] uppercase tracking-[0.18em] text-zinc-500 border-b border-zinc-200">
+            <tr>
+              <th className="text-left px-4 py-3 font-semibold w-12">Pick</th>
+              <th className="text-left px-4 py-3 font-semibold">Method</th>
+              <th className="text-left px-4 py-3 font-semibold">Calculation</th>
+              <th className="text-right px-4 py-3 font-semibold">Fee</th>
+              <th className="text-right px-4 py-3 font-semibold w-32">vs Bottom-up</th>
+            </tr>
+          </thead>
+          <tbody>
+            {Object.entries(methodMap).map(([key, info]) => {
+              const delta = bottomUp > 0 ? ((info.value - bottomUp) / bottomUp * 100) : 0;
+              const positive = delta >= 0;
+              return (
+                <tr key={key} className={`border-b border-zinc-200 last:border-b-0 ${recommendedMethod === key ? "bg-[#0055FF]/5" : ""}`} data-testid={`method-row-${key}`}>
+                  <td className="px-4 py-4">
+                    <input type="radio" name="recommended_method" checked={recommendedMethod === key} onChange={()=>setM({ recommended_method: key })} data-testid={`pick-method-${key}`} />
+                  </td>
+                  <td className="px-4 py-4 text-sm font-semibold">{info.label}</td>
+                  <td className="px-4 py-4 text-xs text-zinc-600 font-mono">{info.desc}</td>
+                  <td className="px-4 py-4 text-right font-mono text-sm font-bold">{fmt(info.value)}</td>
+                  <td className={`px-4 py-4 text-right font-mono text-xs ${key === "bottom_up" ? "text-zinc-400" : positive ? "text-[#007A38]" : "text-[#B22318]"}`}>
+                    {key === "bottom_up" ? "—" : `${positive ? "+" : ""}${delta.toFixed(1)}%`}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+
+      {/* Recommended fee card */}
+      <div className="border-2 border-[#0055FF] bg-[#0055FF]/5 p-6 grid grid-cols-1 md:grid-cols-3 gap-4 items-center" data-testid="recommended-fee">
+        <div className="md:col-span-2">
+          <div className="overline mb-1 text-[#0055FF]">Recommended fee · {methodMap[recommendedMethod]?.label}</div>
+          <div className="font-display text-4xl tracking-tighter font-black font-mono">{fmt(chosenFee)}</div>
+          <p className="text-xs text-zinc-600 mt-1">{methodMap[recommendedMethod]?.desc}</p>
+        </div>
+        <div className="text-sm">
+          <div className="overline mb-1">Override / Final fee</div>
+          <input type="number" step="1" placeholder="Optional override"
+            value={m.final_fee_override ?? ""} onChange={e=>setM({ final_fee_override: e.target.value === "" ? null : parseFloat(e.target.value) })}
+            data-testid="methods-final-override"
+            className="w-full px-3 py-3 border border-[#0A0A0B] text-sm font-mono bg-white" />
+          {m.final_fee_override != null && <p className="text-[10px] uppercase tracking-[0.18em] text-[#0055FF] mt-1">Override active</p>}
+        </div>
+      </div>
+
+      {/* Phase distribution */}
+      <div>
+        <div className="flex items-end justify-between flex-wrap gap-3 mb-3">
+          <div>
+            <div className="overline mb-1">Phase distribution</div>
+            <p className="text-sm text-zinc-600">Splits the recommended fee across project phases using your selected preset.</p>
+          </div>
+          <select value={presetId} onChange={e=>setM({ phase_preset: e.target.value })} data-testid="methods-phase-preset"
+            className="px-3 py-2 border border-[#0A0A0B] text-xs uppercase tracking-[0.15em] font-semibold bg-white">
+            {Object.entries(PHASE_PRESETS).map(([k, p]) => <option key={k} value={k}>{p.name}</option>)}
+          </select>
+        </div>
+        <table className="w-full border border-zinc-200" data-testid="phase-distribution-table">
+          <thead className="bg-zinc-50 text-[10px] uppercase tracking-[0.18em] text-zinc-500 border-b border-zinc-200">
+            <tr>
+              <th className="text-left px-4 py-3 font-semibold">Phase</th>
+              <th className="text-right px-4 py-3 font-semibold w-32">Distribution</th>
+              <th className="text-right px-4 py-3 font-semibold w-48">Fee</th>
+            </tr>
+          </thead>
+          <tbody>
+            {Object.entries(phaseDist).map(([phase, pct]) => (
+              <tr key={phase} className="border-b border-zinc-200 last:border-b-0">
+                <td className="px-4 py-3 text-sm font-semibold">{phase}</td>
+                <td className="px-4 py-3 text-right font-mono text-sm">{Number(pct).toFixed(1)}%</td>
+                <td className="px-4 py-3 text-right font-mono text-sm">{fmt((m.final_fee_override != null ? m.final_fee_override : chosenFee) * (Number(pct) / 100))}</td>
+              </tr>
+            ))}
+            <tr className="bg-zinc-50 border-t-2 border-[#0A0A0B]">
+              <td className="px-4 py-3 text-sm font-bold">Total</td>
+              <td className="px-4 py-3 text-right font-mono text-sm font-bold">{phaseTotal.toFixed(1)}%</td>
+              <td className="px-4 py-3 text-right font-mono text-sm font-bold">{fmt((m.final_fee_override != null ? m.final_fee_override : chosenFee) * phaseTotal / 100)}</td>
+            </tr>
+          </tbody>
+        </table>
+        {Math.abs(phaseTotal - 100) > 0.1 && (
+          <p className="text-[11px] text-[#B22318] mt-2 font-mono">⚠ Preset sums to {phaseTotal.toFixed(1)}% — edit this preset in Settings if it should equal 100%.</p>
+        )}
+      </div>
+    </div>
+  );
+};
+
+/* ------------ Page 08 Summary ------------ */
 const SummaryPage = ({ fb, project, totals, score, fmt }) => (
   <div className="space-y-6">
     <div className="border border-[#0A0A0B] p-8">

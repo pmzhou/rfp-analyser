@@ -452,6 +452,15 @@ class SettingsIn(BaseModel):
     llm_model: Optional[str] = "claude-sonnet-4-5-20250929"
     llm_api_key: Optional[str] = None
     llm_base_url: Optional[str] = ""
+    # Fee Methods defaults (used by Fee Builder "Fee Methods" page)
+    fee_benchmark_by_typology: Optional[Dict[str, float]] = None   # e.g. {"healthcare": 12.0, "residential": 10.0}
+    fee_phase_preset: Optional[str] = "traditional"                # traditional | bim_led | custom
+    fee_phase_distribution: Optional[Dict[str, float]] = None      # e.g. {"SD":15,"DD":20,"CD":40,"Tender":5,"CA":20}
+    fee_overhead_multiplier: Optional[float] = 2.85
+    fee_target_margin_pct: Optional[float] = 20.0
+    fee_lock_to_signing_budget: Optional[bool] = False
+    fee_sliding_scale: Optional[List[Dict[str, float]]] = None     # [{"limit":10000000,"pct":8},{"limit":20000000,"pct":6.5}...]
+    fee_complexity_factors: Optional[List[Dict[str, Any]]] = None  # [{"name":"Healthcare","pct":40,"on":False},...]
 
 
 def _public_settings(s: Dict[str, Any]) -> Dict[str, Any]:
@@ -475,7 +484,10 @@ async def put_settings(body: SettingsIn, user=Depends(get_current_user)):
     # plain fields
     for k in ("default_currency","date_format",
               "smtp_host","smtp_port","smtp_username","smtp_use_tls","smtp_from_name","smtp_from_email",
-              "llm_provider","llm_model","llm_base_url"):
+              "llm_provider","llm_model","llm_base_url",
+              "fee_benchmark_by_typology","fee_phase_preset","fee_phase_distribution",
+              "fee_overhead_multiplier","fee_target_margin_pct","fee_lock_to_signing_budget",
+              "fee_sliding_scale","fee_complexity_factors"):
         v = getattr(body, k)
         if v is not None:
             upd[k] = v

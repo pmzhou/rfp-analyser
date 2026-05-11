@@ -2,7 +2,7 @@ import React, { useEffect, useState } from "react";
 import { api } from "@/lib/api";
 import Layout from "@/components/Layout";
 import { toast } from "sonner";
-import { EnvelopeSimple, Robot, Books, Receipt, Users as UsersIcon, IdentificationCard, FloppyDisk, Plus, Trash, PaperPlaneRight, ArrowLeft, Sliders, ShieldCheck } from "@phosphor-icons/react";
+import { EnvelopeSimple, Robot, Books, Receipt, Users as UsersIcon, IdentificationCard, FloppyDisk, Plus, Trash, PaperPlaneRight, ArrowLeft, Sliders, ShieldCheck, Calculator } from "@phosphor-icons/react";
 import { Link } from "react-router-dom";
 import { usePrefs } from "@/contexts/PrefsContext";
 
@@ -12,6 +12,7 @@ const TABS = [
   { id: "llm", label: "LLM Models", icon: Robot },
   { id: "requirements", label: "Requirements Library", icon: Books },
   { id: "fees", label: "Fee Templates", icon: Receipt },
+  { id: "fee_methods", label: "Fee Methods", icon: Calculator },
   { id: "staff", label: "Staff Roster", icon: IdentificationCard },
   { id: "contacts", label: "Address Book", icon: UsersIcon },
   { id: "nda", label: "NDA Templates", icon: ShieldCheck },
@@ -47,6 +48,7 @@ const Settings = () => {
         {tab === "llm" && <LLMTab />}
         {tab === "requirements" && <LibraryTab type="requirement" />}
         {tab === "fees" && <LibraryTab type="fee_template" />}
+        {tab === "fee_methods" && <FeeMethodsDefaultsTab />}
         {tab === "staff" && <LibraryTab type="staff" />}
         {tab === "contacts" && <LibraryTab type="contact" />}
         {tab === "nda" && <NdaTemplatesTab />}
@@ -498,6 +500,214 @@ const Field = ({ label, value, onChange, type="text", placeholder, testid }) => 
       className="w-full px-3 py-3 border border-[#0A0A0B] focus:outline-none focus:ring-2 focus:ring-[#0055FF] text-sm" />
   </div>
 );
+
+// ---------- Fee Methods Defaults ---------- //
+const DEFAULT_BENCHMARK_TYPOLOGY = {
+  "Residential": 10.0,
+  "Healthcare / Lab": 12.0,
+  "Commercial / Office": 8.0,
+  "Hospitality / F&B": 9.0,
+  "Retail": 8.0,
+  "Education": 10.0,
+  "Industrial": 7.0,
+  "Civil / Infra": 6.0,
+  "Heritage / Refurb": 13.0,
+  "High-rise": 10.0,
+  "Mixed-use": 9.0,
+  "Other": 9.0,
+};
+const DEFAULT_SLIDING_SCALE = [
+  { limit: 10000000, pct: 8.0 },
+  { limit: 30000000, pct: 6.5 },
+  { limit: 80000000, pct: 5.0 },
+  { limit: 999999999, pct: 3.5 },
+];
+const DEFAULT_COMPLEXITY_FACTORS = [
+  { name: "Healthcare / Laboratory", pct: 40, on: false },
+  { name: "Heritage / Refurbishment", pct: 30, on: false },
+  { name: "BIM LOD 400+", pct: 15, on: false },
+  { name: "Phased / Live-site", pct: 20, on: false },
+  { name: "LEED Gold", pct: 3, on: false },
+  { name: "LEED Platinum", pct: 5, on: false },
+  { name: "Commissioning included", pct: 5, on: false },
+];
+const PHASE_PRESETS_PREVIEW = {
+  traditional: "Traditional · SD 17 / DD 18 / CD 40 / Tender 5 / CA 20",
+  bim_led:     "BIM-led · SD 22 / DD 22 / CD 30 / Tender 4 / CA 22",
+  aia:         "AIA B101 · SD 15 / DD 20 / CD 40 / Tender 5 / CA 20",
+  riba:        "RIBA Plan of Work 2020 · stages 0–7",
+};
+
+const FeeMethodsDefaultsTab = () => {
+  const [s, setS] = useState(null);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => { api.get("/settings").then(r => setS(r.data)); }, []);
+
+  const benchmarks = s?.fee_benchmark_by_typology ?? DEFAULT_BENCHMARK_TYPOLOGY;
+  const slabs = (s?.fee_sliding_scale && s.fee_sliding_scale.length) ? s.fee_sliding_scale : DEFAULT_SLIDING_SCALE;
+  const factors = (s?.fee_complexity_factors && s.fee_complexity_factors.length) ? s.fee_complexity_factors : DEFAULT_COMPLEXITY_FACTORS;
+
+  const setField = (k, v) => setS({ ...s, [k]: v });
+  const setBenchmark = (typology, val) => setField("fee_benchmark_by_typology", { ...benchmarks, [typology]: parseFloat(val) || 0 });
+  const addSlab = () => setField("fee_sliding_scale", [...slabs, { limit: 0, pct: 0 }]);
+  const setSlab = (idx, k, v) => setField("fee_sliding_scale", slabs.map((sl, i) => i === idx ? { ...sl, [k]: parseFloat(v) || 0 } : sl));
+  const removeSlab = (idx) => setField("fee_sliding_scale", slabs.filter((_, i) => i !== idx));
+  const addFactor = () => setField("fee_complexity_factors", [...factors, { name: "", pct: 0, on: false }]);
+  const setFactor = (idx, k, v) => setField("fee_complexity_factors", factors.map((f, i) => i === idx ? { ...f, [k]: k === "pct" ? (parseFloat(v) || 0) : v } : f));
+  const removeFactor = (idx) => setField("fee_complexity_factors", factors.filter((_, i) => i !== idx));
+
+  const save = async () => {
+    setBusy(true);
+    try {
+      await api.put("/settings", {
+        fee_benchmark_by_typology: benchmarks,
+        fee_phase_preset: s.fee_phase_preset || "traditional",
+        fee_overhead_multiplier: Number(s.fee_overhead_multiplier) || 2.85,
+        fee_target_margin_pct: Number(s.fee_target_margin_pct) || 20.0,
+        fee_lock_to_signing_budget: !!s.fee_lock_to_signing_budget,
+        fee_sliding_scale: slabs,
+        fee_complexity_factors: factors,
+      });
+      toast.success("Fee methods saved");
+    } catch (e) { toast.error(e?.response?.data?.detail || "Failed to save"); }
+    finally { setBusy(false); }
+  };
+
+  const resetDefaults = () => {
+    if (!window.confirm("Reset all fee-method defaults to industry-standard values?")) return;
+    setS({
+      ...s,
+      fee_benchmark_by_typology: DEFAULT_BENCHMARK_TYPOLOGY,
+      fee_phase_preset: "traditional",
+      fee_overhead_multiplier: 2.85,
+      fee_target_margin_pct: 20.0,
+      fee_lock_to_signing_budget: false,
+      fee_sliding_scale: DEFAULT_SLIDING_SCALE,
+      fee_complexity_factors: DEFAULT_COMPLEXITY_FACTORS,
+    });
+    toast.info("Defaults restored — click Save to persist");
+  };
+
+  if (!s) return <div className="text-zinc-500 font-mono text-sm">Loading…</div>;
+
+  return (
+    <div className="space-y-8" data-testid="fee-methods-tab">
+      <div className="flex items-end justify-between flex-wrap gap-3">
+        <div>
+          <div className="overline mb-2">Fee Builder · Methods defaults</div>
+          <h2 className="font-display text-3xl tracking-tighter font-black">Fee Methods</h2>
+          <p className="text-sm text-zinc-600 mt-1 max-w-2xl">Per-typology benchmark percentages, sliding-scale slabs, complexity factors and global multipliers used by Fee Builder → Fee Methods page. AIA B101-2017 lock-to-signing-budget option included.</p>
+        </div>
+        <div className="flex gap-2">
+          <button onClick={resetDefaults} className="px-4 py-3 border border-[#0A0A0B] text-xs font-semibold uppercase tracking-[0.15em] hover:bg-[#0A0A0B] hover:text-white transition-colors" data-testid="fee-methods-reset">Reset to defaults</button>
+          <button onClick={save} disabled={busy} className="flex items-center gap-2 px-5 py-3 bg-[#0055FF] text-white text-xs font-semibold uppercase tracking-[0.15em] hover:bg-[#0A0A0B] disabled:opacity-50 transition-colors" data-testid="fee-methods-save">
+            <FloppyDisk size={14} weight="bold"/> {busy ? "Saving…" : "Save"}
+          </button>
+        </div>
+      </div>
+
+      {/* Global multipliers */}
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+        <div>
+          <label className="overline block mb-2">Overhead multiplier</label>
+          <input type="number" step="0.05" value={s.fee_overhead_multiplier ?? 2.85} onChange={e=>setField("fee_overhead_multiplier", parseFloat(e.target.value)||0)} data-testid="fee-overhead"
+            className="w-full px-3 py-3 border border-[#0A0A0B] text-sm font-mono" />
+          <p className="text-[10px] uppercase tracking-[0.18em] text-zinc-500 mt-1">ZweigWhite benchmark 2.85–3.10×</p>
+        </div>
+        <div>
+          <label className="overline block mb-2">Target margin %</label>
+          <input type="number" step="1" value={s.fee_target_margin_pct ?? 20} onChange={e=>setField("fee_target_margin_pct", parseFloat(e.target.value)||0)} data-testid="fee-target-margin"
+            className="w-full px-3 py-3 border border-[#0A0A0B] text-sm font-mono" />
+        </div>
+        <div>
+          <label className="overline block mb-2">Default phase preset</label>
+          <select value={s.fee_phase_preset || "traditional"} onChange={e=>setField("fee_phase_preset", e.target.value)} data-testid="fee-phase-preset"
+            className="w-full px-3 py-3 border border-[#0A0A0B] text-sm bg-white">
+            {Object.entries(PHASE_PRESETS_PREVIEW).map(([k, label]) => <option key={k} value={k}>{label.split(" · ")[0]}</option>)}
+          </select>
+          <p className="text-[10px] text-zinc-500 mt-1 font-mono truncate">{PHASE_PRESETS_PREVIEW[s.fee_phase_preset || "traditional"]}</p>
+        </div>
+        <label className="flex items-start gap-2 text-sm pt-7">
+          <input type="checkbox" checked={!!s.fee_lock_to_signing_budget} onChange={e=>setField("fee_lock_to_signing_budget", e.target.checked)} data-testid="fee-lock-budget" className="mt-0.5" />
+          <span>Lock fee to budget at contract signing (AIA B101-2017)</span>
+        </label>
+      </div>
+
+      {/* Benchmark by typology */}
+      <div>
+        <div className="overline mb-3">Benchmark % by typology</div>
+        <div className="border border-zinc-200 grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4">
+          {Object.entries(benchmarks).map(([typ, pct]) => (
+            <div key={typ} className="p-3 border-r border-b border-zinc-200">
+              <div className="text-xs font-semibold mb-1">{typ}</div>
+              <div className="flex items-center gap-1">
+                <input type="number" step="0.1" value={pct} onChange={e=>setBenchmark(typ, e.target.value)} data-testid={`bench-${typ.replace(/\W+/g,'-')}`}
+                  className="w-full px-2 py-1.5 border border-zinc-300 text-sm font-mono" />
+                <span className="text-xs text-zinc-500">%</span>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* Sliding scale */}
+      <div>
+        <div className="flex items-end justify-between mb-3">
+          <div>
+            <div className="overline mb-1">Sliding-scale slabs</div>
+            <p className="text-sm text-zinc-600">Tax-bracket style: each slab applies its % up to its limit, then the next slab handles the rest.</p>
+          </div>
+          <button onClick={addSlab} className="flex items-center gap-1 px-3 py-2 border border-[#0A0A0B] text-[10px] uppercase tracking-[0.15em] font-semibold hover:bg-[#0A0A0B] hover:text-white transition-colors" data-testid="add-slab-btn">
+            <Plus size={12} weight="bold"/> Add slab
+          </button>
+        </div>
+        <table className="w-full border border-zinc-200">
+          <thead className="bg-zinc-50 border-b border-zinc-200 text-[10px] uppercase tracking-[0.18em] text-zinc-500">
+            <tr><th className="text-left px-3 py-2">#</th><th className="text-left px-3 py-2">Up to (construction cost)</th><th className="text-left px-3 py-2">Fee %</th><th></th></tr>
+          </thead>
+          <tbody>
+            {slabs.map((sl, i) => (
+              <tr key={i} className="border-b border-zinc-200 last:border-b-0">
+                <td className="px-3 py-2 font-mono text-xs">{i + 1}</td>
+                <td className="px-3 py-2"><input type="number" step="1000" value={sl.limit} onChange={e=>setSlab(i, "limit", e.target.value)} data-testid={`slab-limit-${i}`} className="w-48 px-2 py-1.5 border border-zinc-300 text-sm font-mono" /></td>
+                <td className="px-3 py-2"><input type="number" step="0.1" value={sl.pct} onChange={e=>setSlab(i, "pct", e.target.value)} data-testid={`slab-pct-${i}`} className="w-24 px-2 py-1.5 border border-zinc-300 text-sm font-mono" /></td>
+                <td className="px-3 py-2 text-right"><button onClick={()=>removeSlab(i)} data-testid={`remove-slab-${i}`} className="p-1.5 border border-zinc-300 hover:bg-[#FF3B30] hover:text-white hover:border-[#FF3B30] transition-colors"><Trash size={12} weight="bold"/></button></td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      {/* Complexity factors */}
+      <div>
+        <div className="flex items-end justify-between mb-3">
+          <div>
+            <div className="overline mb-1">Complexity factors</div>
+            <p className="text-sm text-zinc-600">Uplifts applied to the benchmark fee. Toggled per project on the Fee Methods page.</p>
+          </div>
+          <button onClick={addFactor} className="flex items-center gap-1 px-3 py-2 border border-[#0A0A0B] text-[10px] uppercase tracking-[0.15em] font-semibold hover:bg-[#0A0A0B] hover:text-white transition-colors" data-testid="add-factor-btn">
+            <Plus size={12} weight="bold"/> Add factor
+          </button>
+        </div>
+        <table className="w-full border border-zinc-200">
+          <thead className="bg-zinc-50 border-b border-zinc-200 text-[10px] uppercase tracking-[0.18em] text-zinc-500">
+            <tr><th className="text-left px-3 py-2">Name</th><th className="text-left px-3 py-2 w-32">Uplift %</th><th></th></tr>
+          </thead>
+          <tbody>
+            {factors.map((f, i) => (
+              <tr key={i} className="border-b border-zinc-200 last:border-b-0">
+                <td className="px-3 py-2"><input value={f.name} onChange={e=>setFactor(i, "name", e.target.value)} data-testid={`factor-name-${i}`} className="w-full px-2 py-1.5 border border-zinc-300 text-sm" /></td>
+                <td className="px-3 py-2"><input type="number" step="1" value={f.pct} onChange={e=>setFactor(i, "pct", e.target.value)} data-testid={`factor-pct-${i}`} className="w-24 px-2 py-1.5 border border-zinc-300 text-sm font-mono" /></td>
+                <td className="px-3 py-2 text-right"><button onClick={()=>removeFactor(i)} data-testid={`remove-factor-${i}`} className="p-1.5 border border-zinc-300 hover:bg-[#FF3B30] hover:text-white hover:border-[#FF3B30] transition-colors"><Trash size={12} weight="bold"/></button></td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+};
 
 // ---------- NDA Templates ---------- //
 const NdaTemplatesTab = () => {
