@@ -30,7 +30,18 @@ single proposal.
 - PDF + XLSX export
 - Light/Dark theme, custom date format + currency
 
-### Current session — EOI → NDA → Full Details flow (P0, COMPLETE, BACKEND TESTED)
+### Current session — EOI → NDA → Full Details flow (P0, COMPLETE, TESTED 29/29)
+- 7 public endpoints, owner endpoints, NDA templates library, built-in 2yr mutual NDA, ReportLab signed-NDA PDF, SMTP owner notifications, 3-step RespondPage state machine, Disciplines tab with skip-NDA + anonymise + NDA-PDF-download + replacement-needed banner
+
+### Current session — Fee Methods feature (P1, COMPLETE, TESTED 53/53)
+- Backend SettingsIn extended with 7 fee_* fields + safe partial PUT (model_dump exclude_unset)
+- Fee Builder → Page 07 "Fee Methods" with 4-method comparison + recommended-fee card + override
+- Active-stages-driven phase distribution (matches project's 11-default RIBA stages, not 5-bucket placeholder)
+- Phase preset switcher + "Reset to preset" + "Normalize to 100%" helper
+- Settings → "Fee Methods" tab with per-typology benchmarks, sliding-scale slabs, complexity factors, overhead multiplier, target margin, AIA lock-to-signing toggle
+- "Final fee · <method>" stat highlighted in top stats bar (Option 1 wiring)
+- PDF + XLSX exports include Fee Methods comparison + final fee + phase distribution
+- Sub-Consultants page (05) — Company field now autocompletes from Address Book via <datalist>; picking a known company auto-fills name + discipline + email if blank
 - Backend public endpoints:
   - `GET /api/public/invites/{token}/eoi` — project summary + submission date, marks EOI viewed
   - `POST /api/public/invites/{token}/interest` — interested or declined (with optional reason)

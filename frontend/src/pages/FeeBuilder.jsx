@@ -933,6 +933,17 @@ const FeeMethodsPage = ({ fb, setFb, totals, settings, fmt, allStages }) => {
               className="px-3 py-2 border border-[#0A0A0B] text-xs uppercase tracking-[0.15em] font-semibold bg-white">
               {Object.entries(STAGE_PRESETS).map(([k, p]) => <option key={k} value={k}>{p.name}</option>)}
             </select>
+            {Math.abs(phaseTotal - 100) > 0.5 && phaseTotal > 0 && (
+              <button onClick={() => {
+                const factor = 100 / phaseTotal;
+                const next = {};
+                activeStages.forEach(st => { next[st.id] = +(Number(phaseDist[st.id] || 0) * factor).toFixed(2); });
+                setM({ phase_distribution_custom: next });
+              }} data-testid="methods-phase-normalize"
+                className="px-3 py-2 bg-[#0055FF] text-white text-xs uppercase tracking-[0.15em] font-semibold hover:bg-[#0A0A0B] transition-colors">
+                Normalize to 100%
+              </button>
+            )}
             {m.phase_distribution_custom && (
               <button onClick={resetPhaseToPreset} data-testid="methods-phase-reset"
                 className="px-3 py-2 border border-[#0A0A0B] text-xs uppercase tracking-[0.15em] font-semibold hover:bg-[#0A0A0B] hover:text-white transition-colors">
