@@ -159,6 +159,46 @@ const FeeBuilder = ({ project, onUpdate }) => {
     return { total, max, pct: max > 0 ? (total / max * 100) : 0 };
   }, [fb.matrix]);
 
+  // Final fee resolution: manual override > selected method (from Page 07) > bottom-up
+  const finalFee = useMemo(() => {
+    const m = fb.methods || {};
+    if (m.final_fee_override != null && m.final_fee_override !== "") return Number(m.final_fee_override) || 0;
+    const method = m.recommended_method || "bottom_up";
+    const cc = totals.constructionCost;
+    if (method === "bottom_up") return totals.feeExVat;
+    if (method === "pct_of_cc") {
+      const pct = m.benchmark_pct != null ? Number(m.benchmark_pct) : 9;
+      return cc * (pct / 100);
+    }
+    if (method === "sliding") {
+      const slabs = (settings?.fee_sliding_scale?.length ? settings.fee_sliding_scale : [
+        { limit: 10_000_000, pct: 8.0 }, { limit: 30_000_000, pct: 6.5 },
+        { limit: 80_000_000, pct: 5.0 }, { limit: 999_999_999, pct: 3.5 },
+      ]);
+      let remaining = Math.max(0, cc), prev = 0, t = 0;
+      for (const sl of slabs) {
+        const take = Math.min(remaining, Math.max(0, sl.limit - prev));
+        t += take * (Number(sl.pct || 0) / 100);
+        remaining -= take; prev = sl.limit;
+        if (remaining <= 0) break;
+      }
+      return t;
+    }
+    if (method === "adjusted") {
+      const pct = m.benchmark_pct != null ? Number(m.benchmark_pct) : 9;
+      const factors = m.factors || (settings?.fee_complexity_factors || []);
+      const bonus = factors.filter(f => f.on).reduce((s, f) => s + Number(f.pct || 0), 0);
+      return cc * (pct / 100) * (1 + bonus / 100);
+    }
+    return totals.feeExVat;
+  }, [fb.methods, totals, settings]);
+
+  const methodLabels = { bottom_up: "Bottom-up", pct_of_cc: "% of CC", sliding: "Sliding-scale", adjusted: "Adjusted" };
+  const activeMethod = (fb.methods?.final_fee_override != null && fb.methods?.final_fee_override !== "")
+    ? "Override"
+    : (methodLabels[fb.methods?.recommended_method || "bottom_up"]);
+  const finalFeeWithVat = finalFee * (1 + Number(fb.multipliers.vat_pct || 0) / 100);
+
   /* ------------ helpers ------------ */
   const cur = fb.details.currency || "USD";
   const fmt = (n) => `${cur} ${Number(n||0).toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`;
@@ -169,9 +209,10 @@ const FeeBuilder = ({ project, onUpdate }) => {
   return (
     <div data-testid="fee-builder">
       {/* mini-stats bar */}
-      <div className="grid grid-cols-2 md:grid-cols-5 border border-zinc-200 mb-6">
+      <div className="grid grid-cols-2 md:grid-cols-6 border border-zinc-200 mb-6">
         <Stat label="Fee ex VAT" value={fmt(totals.feeExVat)} mono />
         <Stat label="Fee + VAT" value={fmt(totals.grand)} mono />
+        <Stat label={`Final fee · ${activeMethod}`} value={fmt(finalFee)} mono highlight />
         <Stat label="Margin" value={`${totals.margin.toFixed(1)}%`} mono />
         <Stat label="Fee % of CC" value={`${totals.feeOfCC.toFixed(2)}%`} mono />
         <Stat label="Save status" value={saving ? "Saving…" : "Auto-saved"} muted />
@@ -196,16 +237,16 @@ const FeeBuilder = ({ project, onUpdate }) => {
       {page === "team"     && <TeamPage fb={fb} setFb={setFb} stages={allStages} fmt={fmt} />}
       {page === "subs"     && <SubsPage fb={fb} setFb={setFb} stages={allStages} globalSubs={globalSubs} fmt={fmt} />}
       {page === "combined" && <CombinedPage fb={fb} setMul={setMul} totals={totals} stages={allStages} fmt={fmt} />}
-      {page === "methods"  && <FeeMethodsPage fb={fb} setFb={setFb} totals={totals} settings={settings} fmt={fmt} />}
+      {page === "methods"  && <FeeMethodsPage fb={fb} setFb={setFb} totals={totals} settings={settings} fmt={fmt} allStages={allStages} />}
       {page === "summary"  && <SummaryPage fb={fb} project={project} totals={totals} score={matrixScore} fmt={fmt} />}
     </div>
   );
 };
 
-const Stat = ({ label, value, mono, muted }) => (
-  <div className="p-4 border-r border-b last:border-r-0 border-zinc-200">
-    <div className="overline mb-1">{label}</div>
-    <div className={`${mono ? 'font-mono' : ''} ${muted ? 'text-zinc-500 text-sm' : 'font-display font-bold text-xl tracking-tighter'}`}>{value}</div>
+const Stat = ({ label, value, mono, muted, highlight }) => (
+  <div className={`p-4 border-r border-b last:border-r-0 border-zinc-200 ${highlight ? 'bg-[#0055FF]/5' : ''}`}>
+    <div className={`overline mb-1 ${highlight ? 'text-[#0055FF]' : ''}`}>{label}</div>
+    <div className={`${mono ? 'font-mono' : ''} ${muted ? 'text-zinc-500 text-sm' : 'font-display font-bold text-xl tracking-tighter'} ${highlight ? 'text-[#0055FF]' : ''}`}>{value}</div>
   </div>
 );
 
@@ -461,13 +502,34 @@ const StageCard = ({ s, onToggle, onWeeks }) => (
 
 /* ------------ Page 05 Subs ------------ */
 const SubsPage = ({ fb, setFb, stages, globalSubs, fmt }) => {
+  // Unique companies (with name fallback) from the address book for the datalist
+  const companyOptions = Array.from(new Set(
+    (globalSubs || []).map(c => c.consultant_company).filter(Boolean)
+  )).sort();
+  // Lookup by company name → first matching contact (used to auto-fill name + discipline)
+  const contactByCompany = (company) => (globalSubs || []).find(c => (c.consultant_company || "") === company);
+
   const addSub = (preset) => {
     const newS = preset
-      ? { id: `s-${preset.id}`, name: preset.consultant_name, type: (preset.contact_disciplines||[]).join(", "), company: preset.consultant_company, on: true, mgmt_on: true, mgmt_pct: 10, fees: {} }
-      : { id: `s-${Date.now()}`, name: "New consultant", type: "", company: "", on: true, mgmt_on: true, mgmt_pct: 10, fees: {} };
+      ? { id: `s-${preset.id}`, name: preset.consultant_name, type: (preset.contact_disciplines||[]).join(", "), company: preset.consultant_company, email: preset.consultant_email || "", on: true, mgmt_on: true, mgmt_pct: 10, fees: {} }
+      : { id: `s-${Date.now()}`, name: "New consultant", type: "", company: "", email: "", on: true, mgmt_on: true, mgmt_pct: 10, fees: {} };
     setFb({ ...fb, subs: [...fb.subs, newS] });
   };
   const updateSub = (i, k, v) => { const arr=[...fb.subs]; arr[i]={...arr[i], [k]:v}; setFb({...fb, subs: arr}); };
+  const onCompanyChange = (i, val) => {
+    // Auto-fill name/discipline/email if a known company is picked AND the current name field is blank/default
+    const arr = [...fb.subs];
+    const current = arr[i];
+    const contact = contactByCompany(val);
+    const next = { ...current, company: val };
+    if (contact) {
+      if (!current.name || current.name === "New consultant") next.name = contact.consultant_name || current.name;
+      if (!current.type) next.type = (contact.contact_disciplines || []).join(", ");
+      if (!current.email) next.email = contact.consultant_email || "";
+    }
+    arr[i] = next;
+    setFb({ ...fb, subs: arr });
+  };
   const setSubFee = (i, stageId, val) => {
     const arr=[...fb.subs]; arr[i]={...arr[i], fees:{...arr[i].fees, [stageId]: parseFloat(val)||0}}; setFb({...fb, subs: arr});
   };
@@ -477,11 +539,17 @@ const SubsPage = ({ fb, setFb, stages, globalSubs, fmt }) => {
     <div className="space-y-6">
       <div className="flex flex-wrap gap-2 items-center">
         <button onClick={()=>addSub(null)} data-testid="add-sub-btn" className="flex items-center gap-2 px-4 py-2 bg-[#0A0A0B] text-white text-xs font-semibold uppercase tracking-[0.15em] hover:bg-[#0055FF]"><Plus size={12} weight="bold"/> Add consultant</button>
-        {globalSubs.length > 0 && <span className="overline">From address book:</span>}
+        {globalSubs.length > 0 && <span className="overline">Quick-add from address book:</span>}
         {globalSubs.slice(0,8).map(c => (
-          <button key={c.id} onClick={()=>addSub(c)} className="text-[11px] uppercase tracking-[0.15em] font-mono px-2 py-1 border border-zinc-300 hover:border-[#0055FF] hover:text-[#0055FF]">{c.consultant_name}</button>
+          <button key={c.id} onClick={()=>addSub(c)} data-testid={`quick-add-${c.id}`} className="text-[11px] uppercase tracking-[0.15em] font-mono px-2 py-1 border border-zinc-300 hover:border-[#0055FF] hover:text-[#0055FF]">{c.consultant_name}</button>
         ))}
+        {globalSubs.length === 0 && (
+          <span className="text-[11px] text-zinc-500">No address book entries — add contacts in Settings → Address Book to enable quick-add &amp; company autocomplete.</span>
+        )}
       </div>
+      <datalist id="addr-book-companies">
+        {companyOptions.map(name => <option key={name} value={name} />)}
+      </datalist>
       {fb.subs.length === 0 && <div className="border border-dashed border-zinc-300 p-12 text-center text-sm text-zinc-500">No sub-consultants yet. Add one to set per-stage fees.</div>}
       {fb.subs.map((s, i) => {
         const subTotal = stages.filter(st=>st.on).reduce((sum,st)=>sum+Number(s.fees?.[st.id]||0),0);
@@ -489,22 +557,24 @@ const SubsPage = ({ fb, setFb, stages, globalSubs, fmt }) => {
         return (
           <div key={s.id} className={`border border-zinc-200 p-4 ${s.on?'':'opacity-50'}`} data-testid={`sub-${s.id}`}>
             <div className="flex flex-wrap items-end gap-3 mb-3">
-              <div className="flex-1 min-w-[200px]">
+              <div className="flex-1 min-w-[180px]">
                 <label className="overline block mb-1">Name</label>
-                <input value={s.name} onChange={e=>updateSub(i,"name",e.target.value)} className="w-full px-2 py-1 border border-zinc-300 text-sm" />
+                <input value={s.name} onChange={e=>updateSub(i,"name",e.target.value)} data-testid={`sub-name-${i}`} className="w-full px-2 py-1 border border-zinc-300 text-sm" />
               </div>
-              <div className="flex-1 min-w-[200px]">
+              <div className="flex-1 min-w-[180px]">
                 <label className="overline block mb-1">Discipline / type</label>
-                <input value={s.type} onChange={e=>updateSub(i,"type",e.target.value)} className="w-full px-2 py-1 border border-zinc-300 text-sm" />
+                <input value={s.type} onChange={e=>updateSub(i,"type",e.target.value)} data-testid={`sub-type-${i}`} className="w-full px-2 py-1 border border-zinc-300 text-sm" />
               </div>
-              <div className="flex-1 min-w-[160px]">
-                <label className="overline block mb-1">Company</label>
-                <input value={s.company} onChange={e=>updateSub(i,"company",e.target.value)} className="w-full px-2 py-1 border border-zinc-300 text-sm" />
+              <div className="flex-1 min-w-[180px]">
+                <label className="overline block mb-1 flex items-center gap-1">Company {globalSubs.length>0 && <span className="text-[9px] text-zinc-400 font-normal normal-case tracking-normal">— autocomplete from address book</span>}</label>
+                <input list="addr-book-companies" value={s.company} onChange={e=>onCompanyChange(i, e.target.value)} data-testid={`sub-company-${i}`}
+                  placeholder={globalSubs.length>0 ? "Start typing to pick from address book…" : "Company name"}
+                  className="w-full px-2 py-1 border border-zinc-300 text-sm" />
               </div>
               <label className="flex items-center gap-2 text-xs">
                 <input type="checkbox" checked={s.on} onChange={e=>updateSub(i,"on",e.target.checked)} /> Active
               </label>
-              <button onClick={()=>removeSub(i)} className="p-2 border border-[#0A0A0B] hover:bg-[#FF3B30] hover:text-white hover:border-[#FF3B30]"><Trash size={12} weight="bold"/></button>
+              <button onClick={()=>removeSub(i)} data-testid={`remove-sub-${i}`} className="p-2 border border-[#0A0A0B] hover:bg-[#FF3B30] hover:text-white hover:border-[#FF3B30]"><Trash size={12} weight="bold"/></button>
             </div>
             <div className="overflow-x-auto">
               <table className="min-w-full text-xs">
@@ -597,11 +667,37 @@ const Row = ({ label, value, bold, big, highlight }) => (
 );
 
 /* ------------ Page 07 Fee Methods ------------ */
-const PHASE_PRESETS = {
-  traditional: { name: "Traditional", dist: { SD: 17, DD: 18, CD: 40, Tender: 5, CA: 20 } },
-  bim_led:     { name: "BIM-led",     dist: { SD: 22, DD: 22, CD: 30, Tender: 4, CA: 22 } },
-  riba:        { name: "RIBA Plan of Work 2020", dist: { "0–1 Strategic": 5, "2 Concept": 15, "3 Spatial": 15, "4 Technical": 35, "5 Manufacturing": 5, "6 Handover": 5, "7 In Use": 20 } },
-  aia:         { name: "AIA B101",    dist: { SD: 15, DD: 20, CD: 40, Tender: 5, CA: 20 } },
+// Per-stage default percentages keyed by stage ID (matches DEFAULT_PRE/DEFAULT_POST IDs).
+// Each preset must sum (or near-sum) to 100% across the full default 11-stage lifecycle.
+const STAGE_PRESETS = {
+  traditional: {
+    name: "Traditional",
+    pct: {
+      p1: 2,   // Mobilization
+      p2: 3,   // Data Collection & Pre-Concept
+      p3: 10,  // Concept Design
+      p4: 15,  // Schematic Design
+      p5: 30,  // Detailed Design
+      p6: 5,   // Authority Approvals
+      p7: 5,   // Tender Stage
+      p8: 5,   // Issued for Construction
+      po1: 22, // Construction Supervision
+      po2: 2,  // Handover & Closeout
+      po3: 1,  // Defect Liability Period
+    },
+  },
+  bim_led: {
+    name: "BIM-led",
+    pct: { p1: 2, p2: 4, p3: 14, p4: 18, p5: 25, p6: 4, p7: 3, p8: 4, po1: 22, po2: 3, po3: 1 },
+  },
+  aia: {
+    name: "AIA B101",
+    pct: { p1: 1, p2: 2, p3: 7, p4: 15, p5: 20, p6: 7, p7: 5, p8: 13, po1: 25, po2: 4, po3: 1 },
+  },
+  riba: {
+    name: "RIBA 2020",
+    pct: { p1: 2, p2: 3, p3: 15, p4: 15, p5: 35, p6: 5, p7: 5, p8: 0, po1: 18, po2: 1, po3: 1 },
+  },
 };
 
 const DEFAULT_BENCHMARK_TYPOLOGY = {
@@ -651,9 +747,36 @@ const slidingScaleFee = (cc, slabs) => {
   return total;
 };
 
-const FeeMethodsPage = ({ fb, setFb, totals, settings, fmt }) => {
+// Build a per-stage percentage map for the project's ACTIVE stages.
+// Strategy: take preset values for known stage IDs, then for any active stage
+// without a preset mapping, share the leftover (100% − sum(known)) evenly.
+const buildPhaseDistribution = (activeStages, presetPct, customPct) => {
+  if (customPct && Object.keys(customPct).length > 0) return customPct;
+  const out = {};
+  const unmapped = [];
+  let mappedSum = 0;
+  activeStages.forEach(st => {
+    if (presetPct[st.id] != null) {
+      out[st.id] = Number(presetPct[st.id]);
+      mappedSum += out[st.id];
+    } else {
+      unmapped.push(st.id);
+    }
+  });
+  const leftover = Math.max(0, 100 - mappedSum);
+  if (unmapped.length > 0) {
+    const share = leftover / unmapped.length;
+    unmapped.forEach(id => { out[id] = +share.toFixed(2); });
+  }
+  return out;
+};
+
+const FeeMethodsPage = ({ fb, setFb, totals, settings, fmt, allStages }) => {
   const cc = totals.constructionCost;
   const bottomUp = totals.feeExVat;
+
+  // Active project stages (pre + post, filtered by .on)
+  const activeStages = (allStages || []).filter(s => s.on);
 
   // Defaults from settings, fallback to baked-in (always merge so deletions in Settings don't shrink dropdown)
   const benchmarks = { ...DEFAULT_BENCHMARK_TYPOLOGY, ...(settings?.fee_benchmark_by_typology || {}) };
@@ -682,8 +805,13 @@ const FeeMethodsPage = ({ fb, setFb, totals, settings, fmt }) => {
     adjusted:    { label: "D · Benchmark + complexity", value: adjustedFee, desc: `B + ${complexityBonus.toFixed(0)}% complexity uplift` },
   };
 
-  const chosenFee = methodMap[recommendedMethod]?.value ?? bottomUp;
-  const phaseDist = PHASE_PRESETS[presetId]?.dist || PHASE_PRESETS.traditional.dist;
+  const chosenFee = (m.final_fee_override != null && m.final_fee_override !== "")
+    ? Number(m.final_fee_override)
+    : (methodMap[recommendedMethod]?.value ?? bottomUp);
+
+  // Phase distribution — works across project's ACTIVE stages (not the 5-bucket placeholder)
+  const presetPct = STAGE_PRESETS[presetId]?.pct || STAGE_PRESETS.traditional.pct;
+  const phaseDist = buildPhaseDistribution(activeStages, presetPct, m.phase_distribution_custom);
   const phaseTotal = Object.values(phaseDist).reduce((s,n)=>s+Number(n||0),0);
 
   const setM = (patch) => setFb({ ...fb, methods: { ...m, ...patch } });
@@ -691,6 +819,11 @@ const FeeMethodsPage = ({ fb, setFb, totals, settings, fmt }) => {
     const next = factors.map((f, i) => i === idx ? { ...f, on } : f);
     setM({ factors: next });
   };
+  const setPhasePct = (stageId, val) => {
+    const next = { ...phaseDist, [stageId]: parseFloat(val) || 0 };
+    setM({ phase_distribution_custom: next });
+  };
+  const resetPhaseToPreset = () => setM({ phase_distribution_custom: null });
 
   return (
     <div className="space-y-8" data-testid="fee-methods-page">
@@ -774,9 +907,9 @@ const FeeMethodsPage = ({ fb, setFb, totals, settings, fmt }) => {
       {/* Recommended fee card */}
       <div className="border-2 border-[#0055FF] bg-[#0055FF]/5 p-6 grid grid-cols-1 md:grid-cols-3 gap-4 items-center" data-testid="recommended-fee">
         <div className="md:col-span-2">
-          <div className="overline mb-1 text-[#0055FF]">Recommended fee · {methodMap[recommendedMethod]?.label}</div>
+          <div className="overline mb-1 text-[#0055FF]">Final fee · {m.final_fee_override != null && m.final_fee_override !== "" ? "Manual override" : methodMap[recommendedMethod]?.label}</div>
           <div className="font-display text-4xl tracking-tighter font-black font-mono">{fmt(chosenFee)}</div>
-          <p className="text-xs text-zinc-600 mt-1">{methodMap[recommendedMethod]?.desc}</p>
+          <p className="text-xs text-zinc-600 mt-1">{m.final_fee_override != null && m.final_fee_override !== "" ? `Recommended was ${fmt(methodMap[recommendedMethod]?.value || bottomUp)} via ${methodMap[recommendedMethod]?.label}` : methodMap[recommendedMethod]?.desc}</p>
         </div>
         <div className="text-sm">
           <div className="overline mb-1">Override / Final fee</div>
@@ -784,47 +917,61 @@ const FeeMethodsPage = ({ fb, setFb, totals, settings, fmt }) => {
             value={m.final_fee_override ?? ""} onChange={e=>setM({ final_fee_override: e.target.value === "" ? null : parseFloat(e.target.value) })}
             data-testid="methods-final-override"
             className="w-full px-3 py-3 border border-[#0A0A0B] text-sm font-mono bg-white" />
-          {m.final_fee_override != null && <p className="text-[10px] uppercase tracking-[0.18em] text-[#0055FF] mt-1">Override active</p>}
+          {m.final_fee_override != null && m.final_fee_override !== "" && <p className="text-[10px] uppercase tracking-[0.18em] text-[#0055FF] mt-1">Override active</p>}
         </div>
       </div>
 
-      {/* Phase distribution */}
+      {/* Phase distribution — uses project's ACTUAL active stages */}
       <div>
         <div className="flex items-end justify-between flex-wrap gap-3 mb-3">
           <div>
-            <div className="overline mb-1">Phase distribution</div>
-            <p className="text-sm text-zinc-600">Splits the recommended fee across project phases using your selected preset.</p>
+            <div className="overline mb-1">Phase distribution · {activeStages.length} active stages</div>
+            <p className="text-sm text-zinc-600">Splits the final fee across the stages enabled on page 04 (Team Resourcing). Edit any % to override.</p>
           </div>
-          <select value={presetId} onChange={e=>setM({ phase_preset: e.target.value })} data-testid="methods-phase-preset"
-            className="px-3 py-2 border border-[#0A0A0B] text-xs uppercase tracking-[0.15em] font-semibold bg-white">
-            {Object.entries(PHASE_PRESETS).map(([k, p]) => <option key={k} value={k}>{p.name}</option>)}
-          </select>
+          <div className="flex gap-2">
+            <select value={presetId} onChange={e=>setM({ phase_preset: e.target.value, phase_distribution_custom: null })} data-testid="methods-phase-preset"
+              className="px-3 py-2 border border-[#0A0A0B] text-xs uppercase tracking-[0.15em] font-semibold bg-white">
+              {Object.entries(STAGE_PRESETS).map(([k, p]) => <option key={k} value={k}>{p.name}</option>)}
+            </select>
+            {m.phase_distribution_custom && (
+              <button onClick={resetPhaseToPreset} data-testid="methods-phase-reset"
+                className="px-3 py-2 border border-[#0A0A0B] text-xs uppercase tracking-[0.15em] font-semibold hover:bg-[#0A0A0B] hover:text-white transition-colors">
+                Reset to preset
+              </button>
+            )}
+          </div>
         </div>
         <table className="w-full border border-zinc-200" data-testid="phase-distribution-table">
           <thead className="bg-zinc-50 text-[10px] uppercase tracking-[0.18em] text-zinc-500 border-b border-zinc-200">
             <tr>
-              <th className="text-left px-4 py-3 font-semibold">Phase</th>
-              <th className="text-right px-4 py-3 font-semibold w-32">Distribution</th>
+              <th className="text-left px-4 py-3 font-semibold">Stage</th>
+              <th className="text-right px-4 py-3 font-semibold w-32">Distribution %</th>
               <th className="text-right px-4 py-3 font-semibold w-48">Fee</th>
             </tr>
           </thead>
           <tbody>
-            {Object.entries(phaseDist).map(([phase, pct]) => (
-              <tr key={phase} className="border-b border-zinc-200 last:border-b-0">
-                <td className="px-4 py-3 text-sm font-semibold">{phase}</td>
-                <td className="px-4 py-3 text-right font-mono text-sm">{Number(pct).toFixed(1)}%</td>
-                <td className="px-4 py-3 text-right font-mono text-sm">{fmt((m.final_fee_override != null ? m.final_fee_override : chosenFee) * (Number(pct) / 100))}</td>
-              </tr>
-            ))}
-            <tr className="bg-zinc-50 border-t-2 border-[#0A0A0B]">
+            {activeStages.map(st => {
+              const pct = Number(phaseDist[st.id] || 0);
+              return (
+                <tr key={st.id} className="border-b border-zinc-200 last:border-b-0">
+                  <td className="px-4 py-3 text-sm font-semibold">{st.name}</td>
+                  <td className="px-4 py-3 text-right">
+                    <input type="number" step="0.1" value={pct.toFixed(2)} onChange={e=>setPhasePct(st.id, e.target.value)} data-testid={`phase-pct-${st.id}`}
+                      className="w-24 px-2 py-1.5 border border-zinc-300 text-sm font-mono text-right" />
+                  </td>
+                  <td className="px-4 py-3 text-right font-mono text-sm">{fmt(chosenFee * (pct / 100))}</td>
+                </tr>
+              );
+            })}
+            <tr className={`bg-zinc-50 border-t-2 ${Math.abs(phaseTotal - 100) > 0.5 ? 'border-[#FF3B30]' : 'border-[#0A0A0B]'}`}>
               <td className="px-4 py-3 text-sm font-bold">Total</td>
-              <td className="px-4 py-3 text-right font-mono text-sm font-bold">{phaseTotal.toFixed(1)}%</td>
-              <td className="px-4 py-3 text-right font-mono text-sm font-bold">{fmt((m.final_fee_override != null ? m.final_fee_override : chosenFee) * phaseTotal / 100)}</td>
+              <td className={`px-4 py-3 text-right font-mono text-sm font-bold ${Math.abs(phaseTotal - 100) > 0.5 ? 'text-[#B22318]' : ''}`}>{phaseTotal.toFixed(2)}%</td>
+              <td className="px-4 py-3 text-right font-mono text-sm font-bold">{fmt(chosenFee * phaseTotal / 100)}</td>
             </tr>
           </tbody>
         </table>
-        {Math.abs(phaseTotal - 100) > 0.1 && (
-          <p className="text-[11px] text-[#B22318] mt-2 font-mono">⚠ Preset sums to {phaseTotal.toFixed(1)}% — edit this preset in Settings if it should equal 100%.</p>
+        {Math.abs(phaseTotal - 100) > 0.5 && (
+          <p className="text-[11px] text-[#B22318] mt-2 font-mono">⚠ Distribution sums to {phaseTotal.toFixed(2)}% — adjust to 100% for a balanced proposal.</p>
         )}
       </div>
     </div>

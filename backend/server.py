@@ -409,12 +409,13 @@ async def export_project(project_id: str, format: str = Query("pdf"), user=Depen
     if not p:
         raise HTTPException(404, "Project not found")
     invites = await db.invites.find({"project_id": project_id}, {"_id": 0}).to_list(500)
+    settings = await _get_settings(user["id"])
     safe_name = re.sub(r"[^A-Za-z0-9_-]+", "_", p.get("title", "rfp"))[:60] or "rfp"
     if format == "xlsx":
-        data = export_xlsx(p, invites)
+        data = export_xlsx(p, invites, settings)
         return Response(data, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                         headers={"Content-Disposition": f'attachment; filename="{safe_name}.xlsx"'})
-    data = export_pdf(p, invites)
+    data = export_pdf(p, invites, settings)
     return Response(data, media_type="application/pdf",
                     headers={"Content-Disposition": f'attachment; filename="{safe_name}.pdf"'})
 

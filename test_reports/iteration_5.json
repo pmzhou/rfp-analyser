@@ -1,0 +1,45 @@
+{
+  "summary": "Iteration 5 - Validated all 3 follow-ups: (1) Fee Methods phase distribution drives by ACTIVE project stages (3 rows: Concept Design/Detailed Design/Construction Supervision with traditional preset 10/30/22) instead of fixed 5 buckets. (2) Sub-consultant Company autocomplete via <datalist id='addr-book-companies'> with 4 options confirmed in DOM. (3) Final fee wired into top stats bar (6-column layout, 3rd stat highlighted blue 'Final fee · Adjusted = AED 8,400,000'). Also into PDF + XLSX exports with Final fee + Fee Methods sheet. Backend: 13/13 new tests in test_export_fee_methods.py pass (compute_fee_methods math, override behavior, custom phase distribution, PDF/XLSX back-compat for projects without fee_builder). Previous 40/40 regression suite still green.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {
+        "screen": "FeeBuilder → 07 · Fee Methods page",
+        "issues": [
+          "Phase distribution table shows red 'Distribution sums to 62.00% — adjust to 100% for a balanced proposal' warning when only a subset of preset stages are active (3 of 11). Working as designed (forces user to acknowledge/rebalance), but consider auto-normalising preset percentages to active-stage subset OR providing a 'Normalize to 100%' helper button. Cosmetic UX, not blocking."
+        ]
+      }
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_export_fee_methods.py",
+    "/app/test_reports/pytest/export_fee_methods_results.xml"
+  ],
+  "action_items": [
+    "(optional UX) On Fee Methods page, add a 'Normalize to 100%' button or auto-scale preset percentages when the active stage subset doesn't sum to 100%."
+  ],
+  "critical_code_review_comments": [
+    "export_service.compute_fee_methods correctly mirrors frontend buildPhaseDistribution: preset → fall back evenly across unmapped active stages. Math verified: 50M × 12% × 1.40 = 8,400,000; sliding scale 10M×8% + 20M×6.5% + 20M×5% = 3,100,000. Override path returns 'Manual override' label and clamps to user-entered value.",
+    "Settings preset (fee_phase_preset) bleeds into compute_fee_methods when methods.phase_preset is unset — this is intentional per spec, but document it so future testers know to set methods.phase_preset for deterministic tests.",
+    "/app/backend/server.py line 412 correctly passes settings into export_pdf/export_xlsx (back-compat preserved — no crash when fee_builder is absent; 'Fee Methods' XLSX sheet only added when fee_builder present).",
+    "FeeBuilder.jsx (~1016 lines) is still large; finalFee useMemo + STAGE_PRESETS keyed by stage id p1..p8,po1..po3 cleanly matches backend; SubsPage datalist wiring + onCompanyChange auto-fill verified in DOM."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_export_fee_methods.py (new)"
+  ],
+  "success_rate": {
+    "backend": "100% (13/13 new export+compute tests + 40/40 prior regression = 53/53)",
+    "frontend": "100% on the three targeted flows (stats bar, datalist, phase-distribution table)"
+  },
+  "test_credentials": "demo@rfpqa.example.com / DemoPass123! (UI). Test fixtures sign in via /api/auth/login and create temporary TEST_export_* projects.",
+  "seed_data_creation": "Two ephemeral projects created via API per test run (TEST_export_nofb_* and TEST_export_fb_*); both deleted in fixture teardown. Demo Project fee_builder seed from main agent left intact (healthcare scenario, CC=AED 50M, adjusted method, +40% uplift).",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "All three follow-ups (active-stage phase distribution, address-book autocomplete on Subs page, final fee wired into stats bar + PDF/XLSX exports) verified end-to-end. The only open observation is a UX nit on FeeMethodsPage (phase % can sum to <100% if active stages are a subset of preset coverage; UI shows a non-blocking warning). Pytest results in /app/test_reports/pytest/export_fee_methods_results.xml. Existing test files test_fee_methods_settings.py and test_eoi_nda_flow.py still 40/40 green.",
+  "rca of the issue": "N/A — feature validation, no bugs found. The 62% sum behavior on FeeMethodsPage is by design: when only stages p3/p5/po1 are active, the traditional preset (which assigns 10/30/22 to those IDs out of a full 100% across 11 stages) intentionally yields 62%; the UI prompts the user to rebalance rather than silently up-scaling, preserving the auditability of the preset reference."
+}

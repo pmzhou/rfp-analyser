@@ -13,6 +13,157 @@ from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 
 
+DEFAULT_SLIDING_SCALE = [
+    {"limit": 10_000_000, "pct": 8.0},
+    {"limit": 30_000_000, "pct": 6.5},
+    {"limit": 80_000_000, "pct": 5.0},
+    {"limit": 999_999_999, "pct": 3.5},
+]
+
+
+def _sliding_scale_fee(cc: float, slabs: List[Dict[str, float]]) -> float:
+    remaining = max(0.0, float(cc or 0))
+    prev = 0.0
+    total = 0.0
+    for slab in slabs:
+        limit = float(slab.get("limit", 0))
+        pct = float(slab.get("pct", 0))
+        take = min(remaining, max(0.0, limit - prev))
+        total += take * (pct / 100.0)
+        remaining -= take
+        prev = limit
+        if remaining <= 0:
+            break
+    return total
+
+
+def compute_fee_methods(project: Dict[str, Any], settings: Dict[str, Any] = None) -> Dict[str, Any]:
+    """Compute the 4 method values + final fee + phase distribution for export.
+    Returns {} if project has no fee_builder."""
+    fb = (project or {}).get("fee_builder") or {}
+    if not fb:
+        return {}
+    settings = settings or {}
+    details = fb.get("details") or {}
+    multipliers = fb.get("multipliers") or {}
+    methods = fb.get("methods") or {}
+
+    # Construction cost
+    cc = float(details.get("gfa", 0) or 0) * float(details.get("cost_per_m2", 0) or 0)
+
+    # Bottom-up (mirror frontend totals)
+    edge_total = 0.0
+    active_stages = [s for s in (fb.get("stages_pre") or []) + (fb.get("stages_post") or []) if s.get("on")]
+    for mbr in fb.get("members") or []:
+        if not mbr.get("on"):
+            continue
+        for st in active_stages:
+            h = float((mbr.get("hours") or {}).get(st["id"], 0) or 0)
+            edge_total += h * float(mbr.get("cost_rate", 0) or 0)
+    sub_raw = 0.0
+    mgmt_on_subs = 0.0
+    for sub in fb.get("subs") or []:
+        if not sub.get("on"):
+            continue
+        sub_total = 0.0
+        for st in active_stages:
+            sub_total += float((sub.get("fees") or {}).get(st["id"], 0) or 0)
+        sub_raw += sub_total
+        if sub.get("mgmt_on"):
+            mgmt_on_subs += sub_total * (float(sub.get("mgmt_pct", 0) or 0) / 100.0)
+    pre_cont = edge_total + sub_raw + mgmt_on_subs
+    cont_pct = float(multipliers.get("contingency_pct", 0) or 0)
+    bottom_up = pre_cont * (1 + cont_pct / 100.0)
+
+    # % of CC
+    benchmark_pct = float(methods.get("benchmark_pct") or 9.0)
+    pct_fee = cc * (benchmark_pct / 100.0)
+
+    # Sliding scale
+    slabs = settings.get("fee_sliding_scale") or DEFAULT_SLIDING_SCALE
+    slab_fee = _sliding_scale_fee(cc, slabs)
+
+    # Adjusted
+    factors = methods.get("factors") or settings.get("fee_complexity_factors") or []
+    bonus = sum(float(f.get("pct", 0) or 0) for f in factors if f.get("on"))
+    adjusted = pct_fee * (1 + bonus / 100.0)
+
+    methods_map = {
+        "bottom_up": bottom_up,
+        "pct_of_cc": pct_fee,
+        "sliding":   slab_fee,
+        "adjusted":  adjusted,
+    }
+    method = methods.get("recommended_method") or "bottom_up"
+    override = methods.get("final_fee_override")
+    if override not in (None, ""):
+        try:
+            final_fee = float(override)
+            final_label = "Manual override"
+        except Exception:
+            final_fee = methods_map.get(method, bottom_up)
+            final_label = method
+    else:
+        final_fee = methods_map.get(method, bottom_up)
+        final_label = {
+            "bottom_up": "Bottom-up build-up",
+            "pct_of_cc": f"% of Construction Cost ({benchmark_pct:.2f}%)",
+            "sliding":   "Sliding-scale slabs",
+            "adjusted":  f"Benchmark + {bonus:.0f}% complexity",
+        }.get(method, method)
+
+    # Phase distribution: pull from methods.phase_distribution_custom or apply preset
+    STAGE_PRESETS = {
+        "traditional": {"p1":2,"p2":3,"p3":10,"p4":15,"p5":30,"p6":5,"p7":5,"p8":5,"po1":22,"po2":2,"po3":1},
+        "bim_led":     {"p1":2,"p2":4,"p3":14,"p4":18,"p5":25,"p6":4,"p7":3,"p8":4,"po1":22,"po2":3,"po3":1},
+        "aia":         {"p1":1,"p2":2,"p3":7, "p4":15,"p5":20,"p6":7,"p7":5,"p8":13,"po1":25,"po2":4,"po3":1},
+        "riba":        {"p1":2,"p2":3,"p3":15,"p4":15,"p5":35,"p6":5,"p7":5,"p8":0, "po1":18,"po2":1,"po3":1},
+    }
+    preset_id = methods.get("phase_preset") or settings.get("fee_phase_preset") or "traditional"
+    preset_pct = STAGE_PRESETS.get(preset_id, STAGE_PRESETS["traditional"])
+    custom = methods.get("phase_distribution_custom")
+    if custom:
+        phase_dist = {s["id"]: float(custom.get(s["id"], 0) or 0) for s in active_stages}
+    else:
+        out = {}
+        unmapped = []
+        mapped_sum = 0.0
+        for s in active_stages:
+            if s["id"] in preset_pct:
+                out[s["id"]] = float(preset_pct[s["id"]])
+                mapped_sum += out[s["id"]]
+            else:
+                unmapped.append(s["id"])
+        leftover = max(0.0, 100.0 - mapped_sum)
+        if unmapped:
+            share = leftover / len(unmapped)
+            for sid in unmapped:
+                out[sid] = round(share, 2)
+        phase_dist = out
+
+    phase_rows = [
+        {"id": s["id"], "name": s["name"], "pct": phase_dist.get(s["id"], 0.0),
+         "fee": final_fee * phase_dist.get(s["id"], 0.0) / 100.0}
+        for s in active_stages
+    ]
+
+    return {
+        "currency": details.get("currency") or "USD",
+        "construction_cost": cc,
+        "methods": [
+            {"key": "bottom_up", "label": "A · Bottom-up build-up",   "value": bottom_up},
+            {"key": "pct_of_cc", "label": "B · % of Construction Cost", "value": pct_fee},
+            {"key": "sliding",   "label": "C · Sliding-scale slabs",    "value": slab_fee},
+            {"key": "adjusted",  "label": "D · Benchmark + complexity", "value": adjusted},
+        ],
+        "selected_method": method,
+        "final_fee": final_fee,
+        "final_label": final_label,
+        "phase_preset": preset_id,
+        "phase_distribution": phase_rows,
+    }
+
+
 def _style():
     s = getSampleStyleSheet()
     s.add(ParagraphStyle(name="H", fontName="Helvetica-Bold", fontSize=22, leading=26, spaceAfter=8))
@@ -44,7 +195,7 @@ def _table(data, col_widths=None, header=True):
     return t
 
 
-def export_pdf(project: Dict[str, Any], invites: List[Dict[str, Any]]) -> bytes:
+def export_pdf(project: Dict[str, Any], invites: List[Dict[str, Any]], settings: Dict[str, Any] = None) -> bytes:
     buf = io.BytesIO()
     doc = SimpleDocTemplate(buf, pagesize=A4, leftMargin=18*mm, rightMargin=18*mm, topMargin=18*mm, bottomMargin=18*mm)
     s = _style()
@@ -82,6 +233,32 @@ def export_pdf(project: Dict[str, Any], invites: List[Dict[str, Any]]) -> bytes:
     else:
         flow.append(Paragraph("<i>No fees submitted yet.</i>", s["Body"]))
 
+    # Fee Methods comparison + final fee (only if Fee Builder has been used)
+    fm = compute_fee_methods(project, settings)
+    if fm:
+        flow.append(Paragraph("Fee Methods · Comparison &amp; Rationale", s["Section"]))
+        cur = fm["currency"]
+        flow.append(Paragraph(f"Construction cost: <b>{cur} {fm['construction_cost']:,.0f}</b>", s["Body"]))
+        rows = [["Method", "Fee", "vs Bottom-up"]]
+        bu = next((m["value"] for m in fm["methods"] if m["key"] == "bottom_up"), 0)
+        for mm_ in fm["methods"]:
+            delta = ((mm_["value"] - bu) / bu * 100.0) if bu > 0 else 0.0
+            d_str = "—" if mm_["key"] == "bottom_up" else f"{'+' if delta >= 0 else ''}{delta:.1f}%"
+            rows.append([mm_["label"], f"{cur} {mm_['value']:,.0f}", d_str])
+        flow.append(_table(rows, col_widths=[80*mm, 50*mm, 30*mm]))
+        flow.append(Spacer(1, 8))
+        flow.append(Paragraph(
+            f"<b>Final fee: {cur} {fm['final_fee']:,.0f}</b> &nbsp;·&nbsp; <font color='#666666'>{fm['final_label']}</font>",
+            s["Body"]
+        ))
+        if fm["phase_distribution"]:
+            flow.append(Spacer(1, 8))
+            flow.append(Paragraph(f"Phase distribution · preset: {fm['phase_preset']}", s["Body"]))
+            ph_rows = [["Stage", "% of fee", "Fee"]]
+            for r in fm["phase_distribution"]:
+                ph_rows.append([r["name"], f"{r['pct']:.2f}%", f"{cur} {r['fee']:,.0f}"])
+            flow.append(_table(ph_rows, col_widths=[80*mm, 40*mm, 40*mm]))
+
     if a.get("key_dates"):
         flow.append(PageBreak())
         flow.append(Paragraph("Key Dates", s["Section"]))
@@ -110,7 +287,7 @@ def export_pdf(project: Dict[str, Any], invites: List[Dict[str, Any]]) -> bytes:
     return buf.getvalue()
 
 
-def export_xlsx(project: Dict[str, Any], invites: List[Dict[str, Any]]) -> bytes:
+def export_xlsx(project: Dict[str, Any], invites: List[Dict[str, Any]], settings: Dict[str, Any] = None) -> bytes:
     wb = Workbook()
     head_fill = PatternFill("solid", fgColor="0A0A0B")
     head_font = Font(bold=True, color="FFFFFF", name="Calibri")
@@ -172,6 +349,40 @@ def export_xlsx(project: Dict[str, Any], invites: List[Dict[str, Any]]) -> bytes
     ws5 = wb.create_sheet("Disciplines")
     rows = [[d.get("name",""), d.get("description",""), d.get("scope_summary","")] for d in (a.get("disciplines") or [])]
     write_table(ws5, ["Name","Description","Scope summary"], rows, [22, 40, 60])
+
+    # Sheet 6: Fee Methods (only if fee_builder filled in)
+    fm = compute_fee_methods(project, settings)
+    if fm:
+        ws6 = wb.create_sheet("Fee Methods")
+        cur = fm["currency"]
+        ws6["A1"] = "Fee Methods · Comparison"
+        ws6["A1"].font = Font(bold=True, size=14)
+        ws6["A3"] = "Construction cost"; ws6["B3"] = fm["construction_cost"]
+        ws6["A4"] = "Selected method";    ws6["B4"] = fm["final_label"]
+        ws6["A5"] = "Final fee";          ws6["B5"] = fm["final_fee"]
+        ws6["A6"] = "Currency";           ws6["B6"] = cur
+        # comparison
+        ws6["A8"] = "Method"; ws6["B8"] = "Fee"; ws6["C8"] = "vs Bottom-up"
+        for col in ("A8", "B8", "C8"):
+            ws6[col].fill = head_fill; ws6[col].font = head_font
+        bu = next((m["value"] for m in fm["methods"] if m["key"] == "bottom_up"), 0)
+        for idx, m_ in enumerate(fm["methods"], start=9):
+            ws6.cell(row=idx, column=1, value=m_["label"])
+            ws6.cell(row=idx, column=2, value=m_["value"])
+            delta = ((m_["value"] - bu) / bu * 100.0) if bu > 0 else 0.0
+            ws6.cell(row=idx, column=3, value=("—" if m_["key"] == "bottom_up" else f"{delta:+.1f}%"))
+        # phase distribution
+        ws6.cell(row=15, column=1, value=f"Phase distribution · {fm['phase_preset']}").font = Font(bold=True)
+        ws6["A17"] = "Stage"; ws6["B17"] = "% of fee"; ws6["C17"] = "Fee"
+        for col in ("A17", "B17", "C17"):
+            ws6[col].fill = head_fill; ws6[col].font = head_font
+        for i, r in enumerate(fm["phase_distribution"], start=18):
+            ws6.cell(row=i, column=1, value=r["name"])
+            ws6.cell(row=i, column=2, value=r["pct"] / 100.0).number_format = "0.00%"
+            ws6.cell(row=i, column=3, value=r["fee"])
+        ws6.column_dimensions["A"].width = 50
+        ws6.column_dimensions["B"].width = 18
+        ws6.column_dimensions["C"].width = 18
 
     buf = io.BytesIO()
     wb.save(buf)
